@@ -33,6 +33,16 @@ func (c *Client) Post(ctx context.Context, authToken, table string, query url.Va
 	return c.do(ctx, http.MethodPost, authToken, table, query, body, out, headers)
 }
 
+func (c *Client) PostIgnoreDuplicates(ctx context.Context, authToken, table string, query url.Values, body any, out any) error {
+	headers := map[string]string{"Prefer": "resolution=ignore-duplicates,return=representation"}
+	return c.do(ctx, http.MethodPost, authToken, table, query, body, out, headers)
+}
+
+func (c *Client) Delete(ctx context.Context, authToken, table string, query url.Values, out any) error {
+	headers := map[string]string{"Prefer": "return=representation"}
+	return c.do(ctx, http.MethodDelete, authToken, table, query, nil, out, headers)
+}
+
 func (c *Client) Patch(ctx context.Context, authToken, table string, query url.Values, body any, out any) error {
 	headers := map[string]string{"Prefer": "return=representation"}
 	return c.do(ctx, http.MethodPatch, authToken, table, query, body, out, headers)
