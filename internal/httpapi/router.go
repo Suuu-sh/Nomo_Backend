@@ -36,7 +36,10 @@ func (r *router) routes() {
 	r.mux.HandleFunc("PATCH /v1/me/profile", r.auth(r.updateProfile))
 	r.mux.HandleFunc("GET /v1/friends", r.auth(r.listFriends))
 	r.mux.HandleFunc("GET /v1/drink-logs", r.auth(r.listDrinkLogs))
+	r.mux.HandleFunc("DELETE /v1/drink-logs/{id}", r.auth(r.deleteDrinkLog))
 	r.mux.HandleFunc("POST /v1/drink-logs", r.auth(r.createDrinkLog))
+	r.mux.HandleFunc("PUT /v1/drink-logs/{id}/like", r.auth(r.likeDrinkLog))
+	r.mux.HandleFunc("DELETE /v1/drink-logs/{id}/like", r.auth(r.unlikeDrinkLog))
 	r.mux.HandleFunc("GET /v1/daily-status", r.auth(r.getDailyStatus))
 	r.mux.HandleFunc("PUT /v1/daily-status", r.auth(r.upsertDailyStatus))
 }
@@ -93,16 +96,66 @@ func (r *router) listFriends(w http.ResponseWriter, req *http.Request, authToken
 }
 
 func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authToken string) {
+	userID := req.Header.Get("X-Nomo-User-ID")
+	visibleUserIDs, err := r.visibleFeedUserIDs(req, authToken, userID)
+	if err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
 	q := url.Values{}
-	q.Set("select", "id,drank_at,place_name,memo,photo_path,drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url))")
-	q.Set("owner_user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
+	q.Set("select", "id,owner_user_id,drank_at,place_name,memo,photo_path,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,character_key,avatar_url),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url))")
+	q.Set("owner_user_id", "in.("+strings.Join(visibleUserIDs, ",")+")")
 	q.Set("order", "drank_at.desc")
 	var rows []map[string]any
 	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
+	enrichDrinkLogLikes(rows, userID)
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) visibleFeedUserIDs(req *http.Request, authToken string, userID string) ([]string, error) {
+	q := url.Values{}
+	q.Set("select", "user_a_id,user_b_id")
+	q.Set("or", "(user_a_id.eq."+userID+",user_b_id.eq."+userID+")")
+	var friendships []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "friendships", q, &friendships); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{userID: true}
+	ids := []string{userID}
+	for _, friendship := range friendships {
+		for _, key := range []string{"user_a_id", "user_b_id"} {
+			id, _ := friendship[key].(string)
+			if id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
+}
+
+func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
+	logID := strings.TrimSpace(req.PathValue("id"))
+	if logID == "" {
+		writeError(w, http.StatusBadRequest, "drink log id is required")
+		return
+	}
+	q := url.Values{}
+	q.Set("id", "eq."+logID)
+	q.Set("owner_user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
+	var deleted []map[string]any
+	if err := r.deps.Supabase.Delete(req.Context(), authToken, "drink_logs", q, &deleted); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	if len(deleted) == 0 {
+		writeError(w, http.StatusNotFound, "drink log not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": logID})
 }
 
 func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
@@ -147,6 +200,80 @@ func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 		}
 	}
 	writeJSON(w, http.StatusCreated, logs[0])
+}
+
+func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
+	logID := strings.TrimSpace(req.PathValue("id"))
+	if logID == "" {
+		writeError(w, http.StatusBadRequest, "drink log id is required")
+		return
+	}
+	userID := req.Header.Get("X-Nomo-User-ID")
+	q := url.Values{}
+	q.Set("on_conflict", "drink_log_id,user_id")
+	payload := map[string]any{"drink_log_id": logID, "user_id": userID}
+	var ignored []map[string]any
+	if err := r.deps.Supabase.PostIgnoreDuplicates(req.Context(), authToken, "drink_log_likes", q, payload, &ignored); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	r.writeDrinkLogLikeState(w, req, authToken, logID)
+}
+
+func (r *router) unlikeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
+	logID := strings.TrimSpace(req.PathValue("id"))
+	if logID == "" {
+		writeError(w, http.StatusBadRequest, "drink log id is required")
+		return
+	}
+	q := url.Values{}
+	q.Set("drink_log_id", "eq."+logID)
+	q.Set("user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
+	var ignored []map[string]any
+	if err := r.deps.Supabase.Delete(req.Context(), authToken, "drink_log_likes", q, &ignored); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	r.writeDrinkLogLikeState(w, req, authToken, logID)
+}
+
+func (r *router) writeDrinkLogLikeState(w http.ResponseWriter, req *http.Request, authToken string, logID string) {
+	q := url.Values{}
+	q.Set("select", "user_id")
+	q.Set("drink_log_id", "eq."+logID)
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_log_likes", q, &rows); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	liked := false
+	userID := req.Header.Get("X-Nomo-User-ID")
+	for _, row := range rows {
+		if row["user_id"] == userID {
+			liked = true
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"drink_log_id": logID, "like_count": len(rows), "liked_by_me": liked})
+}
+
+func enrichDrinkLogLikes(rows []map[string]any, userID string) {
+	for _, row := range rows {
+		rawLikes, _ := row["drink_log_likes"].([]any)
+		liked := false
+		for _, raw := range rawLikes {
+			like, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if like["user_id"] == userID {
+				liked = true
+			}
+		}
+		row["like_count"] = len(rawLikes)
+		row["liked_by_me"] = liked
+		delete(row, "drink_log_likes")
+	}
 }
 
 func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
