@@ -35,6 +35,7 @@ func (r *router) routes() {
 	r.mux.HandleFunc("GET /v1/me/profile", r.auth(r.getProfile))
 	r.mux.HandleFunc("PATCH /v1/me/profile", r.auth(r.updateProfile))
 	r.mux.HandleFunc("GET /v1/friends", r.auth(r.listFriends))
+	r.mux.HandleFunc("PATCH /v1/friends/{friendId}/favorite", r.auth(r.setFriendFavorite))
 	r.mux.HandleFunc("GET /v1/drink-logs", r.auth(r.listDrinkLogs))
 	r.mux.HandleFunc("DELETE /v1/drink-logs/{id}", r.auth(r.deleteDrinkLog))
 	r.mux.HandleFunc("POST /v1/drink-logs", r.auth(r.createDrinkLog))
@@ -84,7 +85,7 @@ func (r *router) updateProfile(w http.ResponseWriter, req *http.Request, authTok
 
 func (r *router) listFriends(w http.ResponseWriter, req *http.Request, authToken string) {
 	q := url.Values{}
-	q.Set("select", "user_a_id,user_b_id,user_a:profiles!friendships_user_a_id_fkey(id,user_id,display_name,character_key,avatar_url),user_b:profiles!friendships_user_b_id_fkey(id,user_id,display_name,character_key,avatar_url)")
+	q.Set("select", "user_a_id,user_b_id,is_favorite,user_a:profiles!friendships_user_a_id_fkey(id,user_id,display_name,character_key,avatar_url),user_b:profiles!friendships_user_b_id_fkey(id,user_id,display_name,character_key,avatar_url)")
 	q.Set("or", "(user_a_id.eq."+req.Header.Get("X-Nomo-User-ID")+",user_b_id.eq."+req.Header.Get("X-Nomo-User-ID")+")")
 	q.Set("order", "created_at.desc")
 	var rows []map[string]any
@@ -93,6 +94,60 @@ func (r *router) listFriends(w http.ResponseWriter, req *http.Request, authToken
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) setFriendFavorite(
+	w http.ResponseWriter,
+	req *http.Request,
+	authToken string,
+) {
+	friendID := strings.TrimSpace(req.PathValue("friendId"))
+	if friendID == "" {
+		writeError(w, http.StatusBadRequest, "friend id is required")
+		return
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	rawFavorite, ok := body["is_favorite"]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "is_favorite is required")
+		return
+	}
+	isFavorite, ok := rawFavorite.(bool)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "is_favorite must be a boolean")
+		return
+	}
+
+	userID := req.Header.Get("X-Nomo-User-ID")
+	q := url.Values{}
+	q.Set(
+		"or",
+		"(and(user_a_id.eq."+userID+",user_b_id.eq."+friendID+"),"+
+			"and(user_b_id.eq."+userID+",user_a_id.eq."+friendID+"))",
+	)
+	payload := map[string]any{"is_favorite": isFavorite}
+	var updated []map[string]any
+	if err := r.deps.Supabase.Patch(
+		req.Context(),
+		authToken,
+		"friendships",
+		q,
+		payload,
+		&updated,
+	); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	if len(updated) == 0 {
+		writeError(w, http.StatusNotFound, "friendship not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": len(updated)})
 }
 
 func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authToken string) {
