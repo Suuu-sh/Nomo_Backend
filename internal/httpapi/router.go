@@ -131,16 +131,58 @@ func (r *router) updateFriendFavorite(w http.ResponseWriter, req *http.Request, 
 }
 
 func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authToken string) {
+	userID := req.Header.Get("X-Nomo-User-ID")
+	visibleUserIDs, err := r.visibleFeedUserIDs(req, authToken, userID)
+	if err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+
 	q := url.Values{}
-	q.Set("select", "id,drank_at,place_name,memo,photo_path,drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url,is_plus))")
-	q.Set("owner_user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
+	q.Set("select", "id,owner_user_id,drank_at,place_name,memo,photo_path,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,character_key,avatar_url,is_plus),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url,is_plus))")
+	q.Set("owner_user_id", "in.("+strings.Join(visibleUserIDs, ",")+")")
 	q.Set("order", "drank_at.desc")
 	var rows []map[string]any
 	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
+	for _, row := range rows {
+		rawLikes, _ := row["drink_log_likes"].([]any)
+		row["like_count"] = len(rawLikes)
+		likedByMe := false
+		for _, rawLike := range rawLikes {
+			like, ok := rawLike.(map[string]any)
+			if ok && like["user_id"] == userID {
+				likedByMe = true
+				break
+			}
+		}
+		row["liked_by_me"] = likedByMe
+	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) visibleFeedUserIDs(req *http.Request, authToken, userID string) ([]string, error) {
+	q := url.Values{}
+	q.Set("select", "user_a_id,user_b_id")
+	q.Set("or", "(user_a_id.eq."+userID+",user_b_id.eq."+userID+")")
+	var friendships []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "friendships", q, &friendships); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{userID: true}
+	ids := []string{userID}
+	for _, friendship := range friendships {
+		for _, key := range []string{"user_a_id", "user_b_id"} {
+			id, ok := friendship[key].(string)
+			if ok && id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
 }
 
 func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
