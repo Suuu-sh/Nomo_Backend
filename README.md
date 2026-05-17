@@ -32,3 +32,25 @@ Authenticated requests must include:
 - `POST /v1/drink-logs`
 - `GET /v1/daily-status?date=YYYY-MM-DD`
 - `PUT /v1/daily-status`
+
+## Admin endpoints
+
+Admin operations run only through the trusted backend so the Supabase service
+role key is never shipped to Flutter. Set these backend environment variables in
+dev and production before using `/v1/admin/*`:
+
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NOMO_ADMIN_USER_IDS` (comma-separated `auth.users.id`, recommended)
+- optional `NOMO_ADMIN_EMAILS` for local/dev convenience
+
+Available endpoints:
+
+- `GET /v1/admin/me`
+- `GET /v1/admin/users`
+- `POST /v1/admin/users`
+- `PATCH /v1/admin/users/{id}`
+- `DELETE /v1/admin/users/{id}`
+- `GET /v1/admin/drink-logs`
+- `POST /v1/admin/drink-logs`
+- `PATCH /v1/admin/drink-logs/{id}`
+- `DELETE /v1/admin/drink-logs/{id}`

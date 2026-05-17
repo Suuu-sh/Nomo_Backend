@@ -14,9 +14,10 @@ import (
 )
 
 type Dependencies struct {
-	Config   config.Config
-	Logger   *slog.Logger
-	Supabase *supabase.Client
+	Config        config.Config
+	Logger        *slog.Logger
+	Supabase      *supabase.Client
+	AdminSupabase *supabase.Client
 }
 
 type router struct {
@@ -40,6 +41,15 @@ func (r *router) routes() {
 	r.mux.HandleFunc("DELETE /v1/drink-logs/{id}", r.auth(r.deleteDrinkLog))
 	r.mux.HandleFunc("GET /v1/daily-status", r.auth(r.getDailyStatus))
 	r.mux.HandleFunc("PUT /v1/daily-status", r.auth(r.upsertDailyStatus))
+	r.mux.HandleFunc("GET /v1/admin/me", r.admin(r.adminMe))
+	r.mux.HandleFunc("GET /v1/admin/users", r.admin(r.adminListUsers))
+	r.mux.HandleFunc("POST /v1/admin/users", r.admin(r.adminCreateUser))
+	r.mux.HandleFunc("PATCH /v1/admin/users/{id}", r.admin(r.adminUpdateUser))
+	r.mux.HandleFunc("DELETE /v1/admin/users/{id}", r.admin(r.adminDeleteUser))
+	r.mux.HandleFunc("GET /v1/admin/drink-logs", r.admin(r.adminListDrinkLogs))
+	r.mux.HandleFunc("POST /v1/admin/drink-logs", r.admin(r.adminCreateDrinkLog))
+	r.mux.HandleFunc("PATCH /v1/admin/drink-logs/{id}", r.admin(r.adminUpdateDrinkLog))
+	r.mux.HandleFunc("DELETE /v1/admin/drink-logs/{id}", r.admin(r.adminDeleteDrinkLog))
 }
 
 func (r *router) health(w http.ResponseWriter, _ *http.Request) {

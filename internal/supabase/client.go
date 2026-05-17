@@ -33,6 +33,11 @@ func (c *Client) Post(ctx context.Context, authToken, table string, query url.Va
 	return c.do(ctx, http.MethodPost, authToken, table, query, body, out, headers)
 }
 
+func (c *Client) Upsert(ctx context.Context, authToken, table string, query url.Values, body any, out any) error {
+	headers := map[string]string{"Prefer": "return=representation,resolution=merge-duplicates"}
+	return c.do(ctx, http.MethodPost, authToken, table, query, body, out, headers)
+}
+
 func (c *Client) Patch(ctx context.Context, authToken, table string, query url.Values, body any, out any) error {
 	headers := map[string]string{"Prefer": "return=representation"}
 	return c.do(ctx, http.MethodPatch, authToken, table, query, body, out, headers)
@@ -48,7 +53,10 @@ func (c *Client) do(ctx context.Context, method, authToken, table string, query 
 	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
 	}
+	return c.doURL(ctx, method, endpoint, authToken, body, out, headers)
+}
 
+func (c *Client) doURL(ctx context.Context, method, endpoint, authToken string, body any, out any, headers map[string]string) error {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
@@ -86,6 +94,26 @@ func (c *Client) do(ctx context.Context, method, authToken, table string, query 
 		return nil
 	}
 	return json.Unmarshal(data, out)
+}
+
+func (c *Client) GetAuthUser(ctx context.Context, accessToken string, out any) error {
+	endpoint := fmt.Sprintf("%s/auth/v1/user", c.baseURL)
+	return c.doURL(ctx, http.MethodGet, endpoint, accessToken, nil, out, nil)
+}
+
+func (c *Client) AdminCreateUser(ctx context.Context, body any, out any) error {
+	endpoint := fmt.Sprintf("%s/auth/v1/admin/users", c.baseURL)
+	return c.doURL(ctx, http.MethodPost, endpoint, c.apiKey, body, out, nil)
+}
+
+func (c *Client) AdminUpdateUser(ctx context.Context, userID string, body any, out any) error {
+	endpoint := fmt.Sprintf("%s/auth/v1/admin/users/%s", c.baseURL, url.PathEscape(userID))
+	return c.doURL(ctx, http.MethodPut, endpoint, c.apiKey, body, out, nil)
+}
+
+func (c *Client) AdminDeleteUser(ctx context.Context, userID string) error {
+	endpoint := fmt.Sprintf("%s/auth/v1/admin/users/%s", c.baseURL, url.PathEscape(userID))
+	return c.doURL(ctx, http.MethodDelete, endpoint, c.apiKey, nil, nil, nil)
 }
 
 type APIError struct {
