@@ -37,6 +37,7 @@ func (r *router) routes() {
 	r.mux.HandleFunc("GET /v1/friends", r.auth(r.listFriends))
 	r.mux.HandleFunc("GET /v1/drink-logs", r.auth(r.listDrinkLogs))
 	r.mux.HandleFunc("POST /v1/drink-logs", r.auth(r.createDrinkLog))
+	r.mux.HandleFunc("DELETE /v1/drink-logs/{id}", r.auth(r.deleteDrinkLog))
 	r.mux.HandleFunc("GET /v1/daily-status", r.auth(r.getDailyStatus))
 	r.mux.HandleFunc("PUT /v1/daily-status", r.auth(r.upsertDailyStatus))
 }
@@ -149,6 +150,27 @@ func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 	writeJSON(w, http.StatusCreated, logs[0])
 }
 
+func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
+	logID := strings.TrimSpace(req.PathValue("id"))
+	if logID == "" {
+		writeError(w, http.StatusBadRequest, "drink log id is required")
+		return
+	}
+	q := url.Values{}
+	q.Set("id", "eq."+logID)
+	q.Set("owner_user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
+	var rows []DrinkLog
+	if err := r.deps.Supabase.Delete(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	if len(rows) == 0 {
+		writeError(w, http.StatusNotFound, "drink log not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, rows[0])
+}
+
 func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
 	date := req.URL.Query().Get("date")
 	if date == "" {
@@ -219,7 +241,7 @@ func (r *router) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Nomo-User-ID")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if req.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

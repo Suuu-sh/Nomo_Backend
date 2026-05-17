@@ -38,6 +38,11 @@ func (c *Client) Patch(ctx context.Context, authToken, table string, query url.V
 	return c.do(ctx, http.MethodPatch, authToken, table, query, body, out, headers)
 }
 
+func (c *Client) Delete(ctx context.Context, authToken, table string, query url.Values, out any) error {
+	headers := map[string]string{"Prefer": "return=representation"}
+	return c.do(ctx, http.MethodDelete, authToken, table, query, nil, out, headers)
+}
+
 func (c *Client) do(ctx context.Context, method, authToken, table string, query url.Values, body any, out any, headers map[string]string) error {
 	endpoint := fmt.Sprintf("%s/rest/v1/%s", c.baseURL, table)
 	if len(query) > 0 {
