@@ -21,11 +21,12 @@ type Friend struct {
 }
 
 type DrinkLog struct {
-	ID        string    `json:"id"`
-	DrankAt   time.Time `json:"drank_at"`
-	PlaceName string    `json:"place_name,omitempty"`
-	Memo      string    `json:"memo,omitempty"`
-	PhotoPath string    `json:"photo_path,omitempty"`
+	ID         string    `json:"id"`
+	DrankAt    time.Time `json:"drank_at"`
+	PlaceName  string    `json:"place_name,omitempty"`
+	Memo       string    `json:"memo,omitempty"`
+	PhotoPath  string    `json:"photo_path,omitempty"`
+	IsOfficial bool      `json:"is_official"`
 }
 
 type CreateDrinkLogRequest struct {
@@ -77,6 +78,7 @@ type AdminCreateDrinkLogRequest struct {
 	Memo        string    `json:"memo"`
 	PhotoPath   string    `json:"photo_path"`
 	FriendIDs   []string  `json:"friend_ids"`
+	IsOfficial  bool      `json:"is_official"`
 }
 
 type AdminUpdateDrinkLogRequest struct {
@@ -85,6 +87,7 @@ type AdminUpdateDrinkLogRequest struct {
 	PlaceName   *string    `json:"place_name"`
 	Memo        *string    `json:"memo"`
 	PhotoPath   *string    `json:"photo_path"`
+	IsOfficial  *bool      `json:"is_official"`
 }
 
 type AdminCreateSystemNotificationRequest struct {

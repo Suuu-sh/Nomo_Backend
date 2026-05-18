@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -169,8 +170,9 @@ func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authTok
 		return
 	}
 
+	selectColumns := "id,owner_user_id,drank_at,place_name,memo,photo_path,is_official,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,character_key,avatar_url,is_plus),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url,is_plus))"
 	q := url.Values{}
-	q.Set("select", "id,owner_user_id,drank_at,place_name,memo,photo_path,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,character_key,avatar_url,is_plus),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url,is_plus))")
+	q.Set("select", selectColumns)
 	q.Set("owner_user_id", "in.("+strings.Join(visibleUserIDs, ",")+")")
 	q.Set("order", "drank_at.desc")
 	var rows []map[string]any
@@ -178,6 +180,18 @@ func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authTok
 		writeSupabaseError(w, err)
 		return
 	}
+
+	officialQ := url.Values{}
+	officialQ.Set("select", selectColumns)
+	officialQ.Set("is_official", "eq.true")
+	officialQ.Set("order", "drank_at.desc")
+	var officialRows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", officialQ, &officialRows); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	rows = appendUniqueDrinkLogRows(rows, officialRows...)
+
 	for _, row := range rows {
 		rawLikes, _ := row["drink_log_likes"].([]any)
 		row["like_count"] = len(rawLikes)
@@ -191,6 +205,7 @@ func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authTok
 		}
 		row["liked_by_me"] = likedByMe
 	}
+	sortDrinkLogRowsByDrankAtDesc(rows)
 	writeJSON(w, http.StatusOK, rows)
 }
 
@@ -214,6 +229,41 @@ func (r *router) visibleFeedUserIDs(req *http.Request, authToken, userID string)
 		}
 	}
 	return ids, nil
+}
+
+func appendUniqueDrinkLogRows(rows []map[string]any, extraRows ...map[string]any) []map[string]any {
+	seen := make(map[string]bool, len(rows)+len(extraRows))
+	for _, row := range rows {
+		if id, _ := row["id"].(string); id != "" {
+			seen[id] = true
+		}
+	}
+	for _, row := range extraRows {
+		id, _ := row["id"].(string)
+		if id != "" && seen[id] {
+			continue
+		}
+		if id != "" {
+			seen[id] = true
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func sortDrinkLogRowsByDrankAtDesc(rows []map[string]any) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		return drinkLogRowTime(rows[i]).After(drinkLogRowTime(rows[j]))
+	})
+}
+
+func drinkLogRowTime(row map[string]any) time.Time {
+	value, _ := row["drank_at"].(string)
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err == nil {
+		return parsed
+	}
+	return time.Time{}
 }
 
 func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {

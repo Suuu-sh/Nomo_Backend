@@ -209,7 +209,7 @@ func (r *router) adminDeleteUser(w http.ResponseWriter, req *http.Request, admin
 
 func (r *router) adminListDrinkLogs(w http.ResponseWriter, req *http.Request, _ AuthUser) {
 	q := url.Values{}
-	q.Set("select", "id,owner_user_id,drank_at,place_name,memo,photo_path,created_at,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,avatar_url,is_plus)")
+	q.Set("select", "id,owner_user_id,drank_at,place_name,memo,photo_path,is_official,created_at,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,avatar_url,is_plus)")
 	q.Set("order", "created_at.desc")
 	q.Set("limit", "80")
 	var rows []map[string]any
@@ -241,6 +241,7 @@ func (r *router) adminCreateDrinkLog(w http.ResponseWriter, req *http.Request, _
 		"place_name":    strings.TrimSpace(input.PlaceName),
 		"memo":          strings.TrimSpace(input.Memo),
 		"photo_path":    strings.TrimSpace(input.PhotoPath),
+		"is_official":   input.IsOfficial,
 	}
 	var rows []DrinkLog
 	if err := r.deps.AdminSupabase.Post(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "drink_logs", nil, payload, &rows); err != nil {
@@ -290,6 +291,9 @@ func (r *router) adminUpdateDrinkLog(w http.ResponseWriter, req *http.Request, _
 	}
 	if input.PhotoPath != nil {
 		payload["photo_path"] = strings.TrimSpace(*input.PhotoPath)
+	}
+	if input.IsOfficial != nil {
+		payload["is_official"] = *input.IsOfficial
 	}
 	if len(payload) == 0 {
 		writeJSON(w, http.StatusOK, map[string]string{"id": logID})
