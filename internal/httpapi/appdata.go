@@ -261,12 +261,17 @@ func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToke
 	}
 	payload := map[string]any{"drink_log_id": logID, "user_id": userID}
 	var ignored []map[string]any
+	created := true
 	if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_likes", nil, payload, &ignored); err != nil {
 		var apiErr supabase.APIError
 		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
 			writeSupabaseError(w, err)
 			return
 		}
+		created = false
+	}
+	if created {
+		r.createDrinkLogLikeNotification(req, authToken, logID, userID)
 	}
 	r.writeDrinkLogLikeState(w, req, authToken, logID, userID)
 }
@@ -331,6 +336,95 @@ func (r *router) reportDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"reported": true})
+}
+
+func (r *router) listNotifications(w http.ResponseWriter, req *http.Request, authToken string) {
+	userID := req.Header.Get("X-Nomo-User-ID")
+	q := url.Values{}
+	q.Set("select", "id,kind,title,message,created_at,read_at,actor_user_id,drink_log_id,actor:profiles!notifications_actor_user_id_fkey(id,user_id,display_name,avatar_url)")
+	q.Set("recipient_user_id", "eq."+userID)
+	q.Set("order", "created_at.desc")
+	q.Set("limit", "50")
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "notifications", q, &rows); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) markNotificationsRead(w http.ResponseWriter, req *http.Request, authToken string) {
+	userID := req.Header.Get("X-Nomo-User-ID")
+	now := time.Now().UTC().Format(time.RFC3339)
+	q := url.Values{}
+	q.Set("recipient_user_id", "eq."+userID)
+	q.Set("read_at", "is.null")
+	var rows []map[string]any
+	if err := r.deps.Supabase.Patch(req.Context(), authToken, "notifications", q, map[string]any{"read_at": now}, &rows); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated_count": len(rows)})
+}
+
+func (r *router) createDrinkLogLikeNotification(req *http.Request, authToken, logID, actorUserID string) {
+	if r.deps.AdminSupabase == nil {
+		r.deps.Logger.Warn("skip like notification because admin supabase client is not configured")
+		return
+	}
+
+	q := url.Values{}
+	q.Set("select", "id,owner_user_id")
+	q.Set("id", "eq."+logID)
+	q.Set("limit", "1")
+	var logs []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", q, &logs); err != nil {
+		r.deps.Logger.Warn("failed to fetch drink log for like notification", "error", err, "drink_log_id", logID)
+		return
+	}
+	if len(logs) == 0 {
+		return
+	}
+	recipientUserID, _ := logs[0]["owner_user_id"].(string)
+	if recipientUserID == "" || recipientUserID == actorUserID {
+		return
+	}
+
+	actorName := r.displayNameForNotification(req, authToken, actorUserID)
+	notification := map[string]any{
+		"recipient_user_id": recipientUserID,
+		"actor_user_id":     actorUserID,
+		"drink_log_id":      logID,
+		"kind":              "drink_log_like",
+		"title":             "いいねされました",
+		"message":           actorName + "さんがあなたの飲みログにいいねしました。",
+	}
+	var rows []map[string]any
+	if err := r.deps.AdminSupabase.Post(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "notifications", nil, notification, &rows); err != nil {
+		var apiErr supabase.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+			return
+		}
+		r.deps.Logger.Warn("failed to create like notification", "error", err, "drink_log_id", logID)
+	}
+}
+
+func (r *router) displayNameForNotification(req *http.Request, authToken, userID string) string {
+	q := url.Values{}
+	q.Set("select", "display_name,user_id")
+	q.Set("id", "eq."+userID)
+	q.Set("limit", "1")
+	var profiles []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "profiles", q, &profiles); err != nil || len(profiles) == 0 {
+		return "フレンズ"
+	}
+	if name, ok := profiles[0]["display_name"].(string); ok && strings.TrimSpace(name) != "" {
+		return strings.TrimSpace(name)
+	}
+	if userName, ok := profiles[0]["user_id"].(string); ok && strings.TrimSpace(userName) != "" {
+		return strings.TrimSpace(userName)
+	}
+	return "フレンズ"
 }
 
 func (r *router) listTodayReservations(w http.ResponseWriter, req *http.Request, authToken string) {
