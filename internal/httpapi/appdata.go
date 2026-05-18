@@ -742,6 +742,8 @@ func dateOnlyParam(req *http.Request, name string) string {
 func isValidDailyStatus(status string) bool {
 	switch status {
 	case "unselected",
+		"want_drink",
+		"busy",
 		"can_drink_today",
 		"light_drink",
 		"want_drink_hard",
