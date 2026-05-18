@@ -7,20 +7,22 @@ import (
 )
 
 type Config struct {
-	Environment     string
-	Port            string
-	SupabaseURL     string
-	SupabaseAnonKey string
-	AllowedOrigins  []string
+	Environment            string
+	Port                   string
+	SupabaseURL            string
+	SupabaseAnonKey        string
+	SupabaseServiceRoleKey string
+	AllowedOrigins         []string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Environment:     getEnv("NOMO_ENV", "production"),
-		Port:            getEnv("PORT", "8080"),
-		SupabaseURL:     strings.TrimRight(os.Getenv("SUPABASE_URL"), "/"),
-		SupabaseAnonKey: os.Getenv("SUPABASE_ANON_KEY"),
-		AllowedOrigins:  splitCSV(getEnv("ALLOWED_ORIGINS", "*")),
+		Environment:            getEnv("NOMO_ENV", "production"),
+		Port:                   getEnv("PORT", "8080"),
+		SupabaseURL:            strings.TrimRight(os.Getenv("SUPABASE_URL"), "/"),
+		SupabaseAnonKey:        os.Getenv("SUPABASE_ANON_KEY"),
+		SupabaseServiceRoleKey: strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
+		AllowedOrigins:         splitCSV(getEnv("ALLOWED_ORIGINS", "*")),
 	}
 	if cfg.SupabaseURL == "" {
 		return cfg, errors.New("SUPABASE_URL is required")

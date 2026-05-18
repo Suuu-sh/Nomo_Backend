@@ -19,10 +19,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	supabaseClient := supabase.NewClient(cfg.SupabaseURL, cfg.SupabaseAnonKey, &http.Client{Timeout: 15 * time.Second})
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	supabaseClient := supabase.NewClient(cfg.SupabaseURL, cfg.SupabaseAnonKey, httpClient)
+	var adminSupabaseClient *supabase.Client
+	if cfg.SupabaseServiceRoleKey != "" {
+		adminSupabaseClient = supabase.NewClient(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey, httpClient)
+	}
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(httpapi.Dependencies{Config: cfg, Logger: logger, Supabase: supabaseClient}),
+		Handler:           httpapi.NewRouter(httpapi.Dependencies{Config: cfg, Logger: logger, Supabase: supabaseClient, AdminSupabase: adminSupabaseClient}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
