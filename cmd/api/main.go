@@ -25,9 +25,15 @@ func main() {
 	if cfg.SupabaseServiceRoleKey != "" {
 		adminSupabaseClient = supabase.NewClient(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey, httpClient)
 	}
+	fcm, err := httpapi.NewFCMSender(cfg.FCMServiceAccountJSON, httpClient)
+	if err != nil {
+		logger.Error("fcm configuration error", "error", err)
+		os.Exit(1)
+	}
+
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(httpapi.Dependencies{Config: cfg, Logger: logger, Supabase: supabaseClient, AdminSupabase: adminSupabaseClient}),
+		Handler:           httpapi.NewRouter(httpapi.Dependencies{Config: cfg, Logger: logger, Supabase: supabaseClient, AdminSupabase: adminSupabaseClient, FCM: fcm}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

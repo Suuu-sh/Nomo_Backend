@@ -19,6 +19,7 @@ type Dependencies struct {
 	Logger        *slog.Logger
 	Supabase      *supabase.Client
 	AdminSupabase *supabase.Client
+	FCM           *fcmSender
 }
 
 type router struct {
@@ -52,6 +53,7 @@ func (r *router) routes() {
 	r.mux.HandleFunc("POST /v1/drink-logs/{id}/report", r.auth(r.reportDrinkLog))
 	r.mux.HandleFunc("GET /v1/notifications", r.auth(r.listNotifications))
 	r.mux.HandleFunc("PATCH /v1/notifications/read-all", r.auth(r.markNotificationsRead))
+	r.mux.HandleFunc("PUT /v1/me/push-token", r.auth(r.registerPushToken))
 	r.mux.HandleFunc("GET /v1/daily-status", r.auth(r.getDailyStatus))
 	r.mux.HandleFunc("PUT /v1/daily-status", r.auth(r.upsertDailyStatus))
 	r.mux.HandleFunc("GET /v1/drink-invites/today-reservations", r.auth(r.listTodayReservations))

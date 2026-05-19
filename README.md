@@ -47,6 +47,9 @@ Authenticated requests must include:
 - `GET /v1/drink-invites/incoming-pending?date=YYYY-MM-DD`
 - `POST /v1/drink-invites`
 - `PATCH /v1/drink-invites/{id}`
+- `GET /v1/notifications`
+- `PATCH /v1/notifications/read-all`
+- `PUT /v1/me/push-token`
 
 ## Admin endpoints
 
@@ -70,3 +73,17 @@ Available endpoints:
 - `POST /v1/admin/drink-logs`
 - `PATCH /v1/admin/drink-logs/{id}`
 - `DELETE /v1/admin/drink-logs/{id}`
+
+
+## Push notifications
+
+Device push delivery uses Firebase Cloud Messaging for APNs/TestFlight builds.
+
+Required setup:
+
+1. Add `GoogleService-Info.plist` to the iOS Runner target.
+2. Enable Push Notifications / APNs for the app identifier in Apple Developer and upload/configure the APNs key or certificate in Firebase.
+3. Set `FCM_SERVICE_ACCOUNT_JSON` on the backend to the Firebase service account JSON (raw JSON or base64-encoded JSON).
+4. Run the Supabase migration that creates `public.push_tokens`.
+
+When the app starts on iOS, it asks notification permission and registers the FCM token through `PUT /v1/me/push-token`. The backend sends pushes when it creates notifications for likes, friend requests, and drink invites.

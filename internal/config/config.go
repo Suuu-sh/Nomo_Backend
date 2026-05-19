@@ -13,6 +13,7 @@ type Config struct {
 	SupabaseAnonKey        string
 	SupabaseServiceRoleKey string
 	AllowedOrigins         []string
+	FCMServiceAccountJSON  string
 }
 
 func Load() (Config, error) {
@@ -23,6 +24,7 @@ func Load() (Config, error) {
 		SupabaseAnonKey:        os.Getenv("SUPABASE_ANON_KEY"),
 		SupabaseServiceRoleKey: strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
 		AllowedOrigins:         splitCSV(getEnv("ALLOWED_ORIGINS", "*")),
+		FCMServiceAccountJSON:  strings.TrimSpace(os.Getenv("FCM_SERVICE_ACCOUNT_JSON")),
 	}
 	if cfg.SupabaseURL == "" {
 		return cfg, errors.New("SUPABASE_URL is required")

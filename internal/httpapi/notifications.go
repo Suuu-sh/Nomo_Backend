@@ -38,8 +38,48 @@ func (r *router) insertNotification(req *http.Request, payload map[string]any) (
 }
 
 func (r *router) tryInsertNotification(req *http.Request, payload map[string]any, event string) {
-	if _, err := r.insertNotification(req, payload); err != nil {
+	created, err := r.insertNotification(req, payload)
+	if err != nil {
 		r.logNotificationWarning("failed to create notification", event, err)
+		return
+	}
+	if created {
+		r.sendPushForNotification(req, payload, event)
+	}
+}
+
+func (r *router) sendPushForNotification(req *http.Request, payload map[string]any, event string) {
+	if r.deps.FCM == nil || r.deps.AdminSupabase == nil || r.deps.Config.SupabaseServiceRoleKey == "" {
+		return
+	}
+	recipientID, _ := payload["recipient_user_id"].(string)
+	title, _ := payload["title"].(string)
+	message, _ := payload["message"].(string)
+	if recipientID == "" || title == "" || message == "" {
+		return
+	}
+	q := url.Values{}
+	q.Set("select", "token")
+	q.Set("user_id", "eq."+recipientID)
+	var rows []map[string]any
+	if err := r.deps.AdminSupabase.Get(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "push_tokens", q, &rows); err != nil {
+		r.logNotificationWarning("failed to fetch push tokens", event, err)
+		return
+	}
+	data := map[string]string{"kind": event}
+	for _, key := range []string{"drink_log_id", "friend_request_id", "drink_invite_id"} {
+		if value, ok := payload[key].(string); ok && value != "" {
+			data[key] = value
+		}
+	}
+	for _, row := range rows {
+		token, _ := row["token"].(string)
+		if token == "" {
+			continue
+		}
+		if err := r.deps.FCM.Send(req.Context(), token, title, message, data); err != nil {
+			r.logNotificationWarning("failed to send push notification", event, err)
+		}
 	}
 }
 
