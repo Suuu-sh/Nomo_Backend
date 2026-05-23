@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -230,12 +229,11 @@ func (r *router) createTodayReservationReminderNotifications(req *http.Request, 
 
 func (r *router) adminCreateNotification(w http.ResponseWriter, req *http.Request, _ AuthUser) {
 	var input AdminCreateSystemNotificationRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	title := strings.TrimSpace(input.Title)
-	message := strings.TrimSpace(input.Message)
+	title := shortText(input.Title, 80)
+	message := shortText(input.Message, 500)
 	if title == "" {
 		writeError(w, http.StatusBadRequest, "title is required")
 		return
@@ -244,7 +242,11 @@ func (r *router) adminCreateNotification(w http.ResponseWriter, req *http.Reques
 		writeError(w, http.StatusBadRequest, "message is required")
 		return
 	}
-	recipientIDs, err := r.notificationRecipientIDs(req, input)
+	recipientIDs, errMessage, err := r.notificationRecipientIDs(req, input)
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
 	if err != nil {
 		writeSupabaseError(w, err)
 		return
@@ -280,21 +282,24 @@ func (r *router) adminCreateNotification(w http.ResponseWriter, req *http.Reques
 	})
 }
 
-func (r *router) notificationRecipientIDs(req *http.Request, input AdminCreateSystemNotificationRequest) ([]string, error) {
+func (r *router) notificationRecipientIDs(req *http.Request, input AdminCreateSystemNotificationRequest) ([]string, string, error) {
 	seen := map[string]bool{}
 	ids := make([]string, 0, len(input.RecipientUserIDs))
 	add := func(id string) {
-		trimmed := strings.TrimSpace(id)
-		if trimmed != "" && !seen[trimmed] {
-			seen[trimmed] = true
-			ids = append(ids, trimmed)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
-	for _, id := range input.RecipientUserIDs {
+	inputIDs, errMessage := cleanUUIDs(input.RecipientUserIDs, "recipient user id")
+	if errMessage != "" {
+		return nil, errMessage, nil
+	}
+	for _, id := range inputIDs {
 		add(id)
 	}
 	if !input.SendToAll {
-		return ids, nil
+		return ids, "", nil
 	}
 	q := url.Values{}
 	q.Set("select", "id")
@@ -302,13 +307,15 @@ func (r *router) notificationRecipientIDs(req *http.Request, input AdminCreateSy
 	q.Set("limit", "10000")
 	var profiles []map[string]any
 	if err := r.deps.AdminSupabase.Get(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "profiles", q, &profiles); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for _, profile := range profiles {
 		id, _ := profile["id"].(string)
-		add(id)
+		if cleanID, errMessage := cleanUUID(id, "recipient user id"); errMessage == "" {
+			add(cleanID)
+		}
 	}
-	return ids, nil
+	return ids, "", nil
 }
 
 func dateOrNil(value string) any {

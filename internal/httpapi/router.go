@@ -94,8 +94,7 @@ func (r *router) getProfile(w http.ResponseWriter, req *http.Request, authToken 
 
 func (r *router) updateProfile(w http.ResponseWriter, req *http.Request, authToken string) {
 	var body map[string]any
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &body) {
 		return
 	}
 	allowed := map[string]any{}
@@ -146,14 +145,13 @@ func (r *router) listFriends(w http.ResponseWriter, req *http.Request, authToken
 }
 
 func (r *router) updateFriendFavorite(w http.ResponseWriter, req *http.Request, authToken string) {
-	friendID := strings.TrimSpace(req.PathValue("id"))
-	if friendID == "" {
-		writeError(w, http.StatusBadRequest, "friend id is required")
+	friendID, errMessage := cleanUUID(req.PathValue("id"), "friend id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input FriendFavoriteRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	userID := req.Header.Get("X-Nomo-User-ID")
@@ -277,8 +275,12 @@ func drinkLogRowTime(row map[string]any) time.Time {
 
 func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input CreateDrinkLogRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	friendIDs, errMessage := cleanUUIDs(input.FriendIDs, "friend id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	drankAt := time.Now()
@@ -303,29 +305,22 @@ func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 		writeError(w, http.StatusBadGateway, "drink log insert returned no rows")
 		return
 	}
-	if len(input.FriendIDs) > 0 {
-		links := make([]map[string]string, 0, len(input.FriendIDs))
-		for _, id := range input.FriendIDs {
-			if trimmed := strings.TrimSpace(id); trimmed != "" {
-				links = append(links, map[string]string{"drink_log_id": logs[0].ID, "friend_user_id": trimmed})
-			}
-		}
+	if len(friendIDs) > 0 {
+		links := drinkLogFriendLinks(logs[0].ID, friendIDs)
 		var ignored []map[string]any
-		if len(links) > 0 {
-			if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_friends", nil, links, &ignored); err != nil {
-				writeSupabaseError(w, err)
-				return
-			}
+		if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_friends", nil, links, &ignored); err != nil {
+			writeSupabaseError(w, err)
+			return
 		}
 	}
-	r.createDrinkLogTaggedNotifications(req, authToken, logs[0].ID, ownerUserID, input.FriendIDs)
+	r.createDrinkLogTaggedNotifications(req, authToken, logs[0].ID, ownerUserID, friendIDs)
 	writeJSON(w, http.StatusCreated, logs[0])
 }
 
 func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	q := url.Values{}
@@ -344,9 +339,10 @@ func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 }
 
 func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
-	date := req.URL.Query().Get("date")
-	if date == "" {
-		date = time.Now().Format(time.DateOnly)
+	date, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get("date"), "date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
 	}
 	q := url.Values{}
 	q.Set("select", "user_id,status_date,status,updated_at")
@@ -362,20 +358,22 @@ func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authTo
 
 func (r *router) upsertDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input DailyStatusRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	if input.StatusDate == "" {
-		input.StatusDate = time.Now().Format(time.DateOnly)
+	statusDate, errMessage := cleanDateOnlyOrToday(input.StatusDate, "status_date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
 	}
+	input.Status = strings.TrimSpace(input.Status)
 	if !isValidDailyStatus(input.Status) {
 		writeError(w, http.StatusBadRequest, "status is invalid")
 		return
 	}
 	q := url.Values{}
 	q.Set("on_conflict", "user_id,status_date")
-	payload := map[string]any{"user_id": req.Header.Get("X-Nomo-User-ID"), "status_date": input.StatusDate, "status": input.Status}
+	payload := map[string]any{"user_id": req.Header.Get("X-Nomo-User-ID"), "status_date": statusDate, "status": input.Status}
 	var rows []map[string]any
 	if err := r.deps.Supabase.Upsert(req.Context(), authToken, "daily_statuses", q, payload, &rows); err != nil {
 		writeSupabaseError(w, err)
@@ -397,8 +395,9 @@ func (r *router) auth(next func(http.ResponseWriter, *http.Request, string)) htt
 			return
 		}
 		userID := strings.TrimSpace(req.Header.Get("X-Nomo-User-ID"))
-		if userID == "" {
-			writeError(w, http.StatusBadRequest, "X-Nomo-User-ID header is required")
+		cleanUserID, errMessage := cleanUUID(userID, "X-Nomo-User-ID")
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
 			return
 		}
 		var authUser AuthUser
@@ -406,15 +405,16 @@ func (r *router) auth(next func(http.ResponseWriter, *http.Request, string)) htt
 			writeSupabaseError(w, err)
 			return
 		}
-		if authUser.ID == "" {
+		authUserID, errMessage := cleanUUID(authUser.ID, "auth user id")
+		if errMessage != "" {
 			writeError(w, http.StatusUnauthorized, "invalid auth user")
 			return
 		}
-		if userID != authUser.ID {
+		if cleanUserID != authUserID {
 			writeError(w, http.StatusForbidden, "auth user mismatch")
 			return
 		}
-		req.Header.Set("X-Nomo-User-ID", authUser.ID)
+		req.Header.Set("X-Nomo-User-ID", authUserID)
 		next(w, req, token)
 	}
 }
@@ -461,8 +461,27 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeSupabaseError(w http.ResponseWriter, err error) {
 	var apiErr supabase.APIError
 	if errors.As(err, &apiErr) {
-		writeError(w, apiErr.StatusCode, apiErr.Body)
+		writeError(w, apiErr.StatusCode, safeSupabaseErrorMessage(apiErr.StatusCode))
 		return
 	}
-	writeError(w, http.StatusBadGateway, err.Error())
+	writeError(w, http.StatusBadGateway, "upstream service error")
+}
+
+func safeSupabaseErrorMessage(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication failed"
+	case status == http.StatusForbidden:
+		return "access denied"
+	case status == http.StatusNotFound:
+		return "resource not found"
+	case status == http.StatusConflict:
+		return "request conflicts with existing data"
+	case status == http.StatusTooManyRequests:
+		return "too many requests"
+	case status >= 500:
+		return "upstream service error"
+	default:
+		return "request rejected by upstream service"
+	}
 }

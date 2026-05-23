@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -46,8 +45,7 @@ type DrinkLogReportRequest struct {
 
 func (r *router) upsertProfile(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input ProfileSaveRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	input.normalize()
@@ -96,19 +94,20 @@ func (r *router) getProfileByUserID(w http.ResponseWriter, req *http.Request, au
 
 func (r *router) createFriendship(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input FriendIDRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	friendID := strings.TrimSpace(input.FriendID)
 	if friendID == "" {
 		friendID = strings.TrimSpace(input.ToUserID)
 	}
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if friendID == "" {
-		writeError(w, http.StatusBadRequest, "friend_id is required")
+	var errMessage string
+	friendID, errMessage = cleanUUID(friendID, "friend_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
+	userID := req.Header.Get("X-Nomo-User-ID")
 	if friendID == userID {
 		writeError(w, http.StatusBadRequest, "cannot add yourself as a friend")
 		return
@@ -126,12 +125,12 @@ func (r *router) createFriendship(w http.ResponseWriter, req *http.Request, auth
 }
 
 func (r *router) getFriendRequestStatus(w http.ResponseWriter, req *http.Request, authToken string) {
-	friendID := strings.TrimSpace(req.URL.Query().Get("friend_id"))
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if friendID == "" {
-		writeError(w, http.StatusBadRequest, "friend_id is required")
+	friendID, errMessage := cleanUUID(req.URL.Query().Get("friend_id"), "friend_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
+	userID := req.Header.Get("X-Nomo-User-ID")
 	if friendID == userID {
 		writeJSON(w, http.StatusOK, map[string]any{"already_friend": false, "request_state": "self"})
 		return
@@ -170,19 +169,20 @@ func (r *router) getFriendRequestStatus(w http.ResponseWriter, req *http.Request
 
 func (r *router) createFriendRequest(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input FriendIDRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	toUserID := strings.TrimSpace(input.ToUserID)
 	if toUserID == "" {
 		toUserID = strings.TrimSpace(input.FriendID)
 	}
-	fromUserID := req.Header.Get("X-Nomo-User-ID")
-	if toUserID == "" {
-		writeError(w, http.StatusBadRequest, "to_user_id is required")
+	var errMessage string
+	toUserID, errMessage = cleanUUID(toUserID, "to_user_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
+	fromUserID := req.Header.Get("X-Nomo-User-ID")
 	if toUserID == fromUserID {
 		writeError(w, http.StatusBadRequest, "cannot send a friend request to yourself")
 		return
@@ -212,14 +212,13 @@ func (r *router) createFriendRequest(w http.ResponseWriter, req *http.Request, a
 }
 
 func (r *router) updateFriendRequest(w http.ResponseWriter, req *http.Request, authToken string) {
-	requestID := strings.TrimSpace(req.PathValue("id"))
-	if requestID == "" {
-		writeError(w, http.StatusBadRequest, "friend request id is required")
+	requestID, errMessage := cleanUUID(req.PathValue("id"), "friend request id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input FriendRequestUpdateRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	status := strings.TrimSpace(input.Status)
@@ -259,10 +258,10 @@ func (r *router) updateFriendRequest(w http.ResponseWriter, req *http.Request, a
 }
 
 func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
 	userID := req.Header.Get("X-Nomo-User-ID")
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	payload := map[string]any{"drink_log_id": logID, "user_id": userID}
@@ -283,10 +282,10 @@ func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToke
 }
 
 func (r *router) unlikeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
 	userID := req.Header.Get("X-Nomo-User-ID")
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	q := url.Values{}
@@ -301,15 +300,14 @@ func (r *router) unlikeDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 }
 
 func (r *router) reportDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
 	userID := req.Header.Get("X-Nomo-User-ID")
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input DrinkLogReportRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	reason := strings.TrimSpace(input.Reason)
@@ -469,23 +467,23 @@ func (r *router) listIncomingPendingInvites(w http.ResponseWriter, req *http.Req
 
 func (r *router) createDrinkInvite(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input DrinkInviteRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	fromUserID := req.Header.Get("X-Nomo-User-ID")
-	toUserID := strings.TrimSpace(input.ToUserID)
-	if toUserID == "" {
-		writeError(w, http.StatusBadRequest, "to_user_id is required")
+	toUserID, errMessage := cleanUUID(input.ToUserID, "to_user_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	if toUserID == fromUserID {
 		writeError(w, http.StatusBadRequest, "cannot invite yourself")
 		return
 	}
-	inviteDate := strings.TrimSpace(input.InviteDate)
-	if inviteDate == "" {
-		inviteDate = time.Now().Format(time.DateOnly)
+	inviteDate, errMessage := cleanDateOnlyOrToday(input.InviteDate, "invite_date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
 	}
 	if blockedMessage, err := r.blockedInviteStatusMessage(req.Context(), authToken, toUserID, inviteDate); err != nil {
 		writeSupabaseError(w, err)
@@ -556,14 +554,13 @@ func (r *router) blockedInviteStatusMessage(ctx context.Context, authToken, user
 }
 
 func (r *router) updateDrinkInvite(w http.ResponseWriter, req *http.Request, authToken string) {
-	inviteID := strings.TrimSpace(req.PathValue("id"))
-	if inviteID == "" {
-		writeError(w, http.StatusBadRequest, "drink invite id is required")
+	inviteID, errMessage := cleanUUID(req.PathValue("id"), "drink invite id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input DrinkInviteUpdateRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	status := strings.TrimSpace(input.Status)
@@ -810,8 +807,8 @@ func orderedPair(a, b string) (string, string) {
 }
 
 func dateOnlyParam(req *http.Request, name string) string {
-	value := strings.TrimSpace(req.URL.Query().Get(name))
-	if value == "" {
+	value, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get(name), name)
+	if errMessage != "" {
 		return time.Now().Format(time.DateOnly)
 	}
 	return value

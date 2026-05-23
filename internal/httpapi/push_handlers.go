@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -14,14 +13,17 @@ type PushTokenRequest struct {
 
 func (r *router) registerPushToken(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input PushTokenRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	token := strings.TrimSpace(input.Token)
 	platform := strings.ToLower(strings.TrimSpace(input.Platform))
 	if token == "" {
 		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	if len(token) > 4096 {
+		writeError(w, http.StatusBadRequest, "token is too long")
 		return
 	}
 	if platform == "" {
