@@ -662,3 +662,152 @@ func TestAdminDeleteUserRejectsSelfDelete(t *testing.T) {
 		t.Fatal("admin delete user request was sent for self-delete")
 	}
 }
+
+func TestUpdateFriendRequestAcceptedCreatesFriendship(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/rest/v1/friend_requests":
+			if req.Method == http.MethodPatch {
+				writeFakeJSON(w, http.StatusOK, []map[string]any{{
+					"id":           testRequestID,
+					"from_user_id": otherUserID,
+					"to_user_id":   testUserID,
+					"status":       "accepted",
+				}})
+				return
+			}
+		case "/rest/v1/friendships":
+			writeFakeJSON(w, http.StatusCreated, []map[string]any{{"id": "friendship"}})
+			return
+		case "/rest/v1/profiles":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{"display_name": "Actor", "user_id": "actor"}})
+			return
+		case "/rest/v1/notifications":
+			writeFakeJSON(w, http.StatusCreated, []map[string]any{{"id": "notification"}})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/friend-requests/"+testRequestID, `{"status":"accepted"}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/friendships")
+	if !ok {
+		t.Fatal("friendship upsert request was not sent")
+	}
+	if !strings.Contains(request.Body, testUserID) || !strings.Contains(request.Body, otherUserID) {
+		t.Fatalf("friendship body does not include both users: %s", request.Body)
+	}
+}
+
+func TestUpdateFriendRequestRejectedDoesNotCreateFriendship(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/rest/v1/friend_requests" && req.Method == http.MethodPatch {
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"id":           testRequestID,
+				"from_user_id": otherUserID,
+				"to_user_id":   testUserID,
+				"status":       "rejected",
+			}})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/friend-requests/"+testRequestID, `{"status":"rejected"}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	if _, ok := fake.lastRequest("/rest/v1/friendships"); ok {
+		t.Fatal("friendship was created for rejected request")
+	}
+}
+
+func TestUpdateDrinkInviteAcceptedOnlyCreatesAcceptedNotification(t *testing.T) {
+	inviteID := "33333333-4444-5555-6666-777777777777"
+	for _, tc := range []struct {
+		status                 string
+		expectNotificationPost bool
+	}{
+		{status: "accepted", expectNotificationPost: true},
+		{status: "rejected", expectNotificationPost: false},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+				switch req.URL.Path {
+				case "/rest/v1/drink_invites":
+					if req.Method == http.MethodPatch {
+						writeFakeJSON(w, http.StatusOK, []map[string]any{{
+							"id":           inviteID,
+							"from_user_id": otherUserID,
+							"to_user_id":   testUserID,
+							"status":       tc.status,
+						}})
+						return
+					}
+				case "/rest/v1/profiles":
+					writeFakeJSON(w, http.StatusOK, []map[string]any{{"display_name": "Actor", "user_id": "actor"}})
+					return
+				case "/rest/v1/notifications":
+					writeFakeJSON(w, http.StatusCreated, []map[string]any{{"id": "notification"}})
+					return
+				}
+				writeFakeJSON(w, http.StatusOK, []map[string]any{})
+			})
+			w := httptest.NewRecorder()
+
+			testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/drink-invites/"+inviteID, `{"status":"`+tc.status+`"}`))
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+			}
+			_, notificationPosted := fake.lastRequest("/rest/v1/notifications")
+			if notificationPosted != tc.expectNotificationPost {
+				t.Fatalf("notification posted = %v, want %v", notificationPosted, tc.expectNotificationPost)
+			}
+		})
+	}
+}
+
+func TestAdminCreateNotificationSendToAllAndConflictPartialResult(t *testing.T) {
+	postCount := 0
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/rest/v1/profiles":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{"id": otherUserID}, {"id": testUserID}})
+		case "/rest/v1/notifications":
+			postCount++
+			if postCount == 1 {
+				http.Error(w, `{"code":"23505","message":"duplicate"}`, http.StatusConflict)
+				return
+			}
+			writeFakeJSON(w, http.StatusCreated, []map[string]any{{"id": "notification"}})
+		default:
+			writeFakeJSON(w, http.StatusOK, []map[string]any{})
+		}
+	})
+	w := httptest.NewRecorder()
+	body := `{"title":"Title","message":"Message","send_to_all":true,"recipient_user_ids":["` + otherUserID + `"]}`
+
+	testRouter(fake, "user@example.com").ServeHTTP(w, authedRequest(http.MethodPost, "/v1/admin/notifications", body))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"recipient_count":2`) || !strings.Contains(w.Body.String(), `"created_count":1`) {
+		t.Fatalf("unexpected partial notification result: %s", w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/profiles")
+	if !ok {
+		t.Fatal("send_to_all profiles query was not sent")
+	}
+	if request.Query.Get("limit") != "10000" || request.Query.Get("select") != "id" {
+		t.Fatalf("unexpected send_to_all query: %#v", request.Query)
+	}
+}
