@@ -31,6 +31,12 @@ func (r *router) adminMe(w http.ResponseWriter, req *http.Request, adminUser Aut
 }
 
 func (r *router) adminListUsers(w http.ResponseWriter, req *http.Request, _ AuthUser) {
+	statusDate, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get("date"), "date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+
 	q := url.Values{}
 	q.Set(
 		"select",
@@ -47,7 +53,7 @@ func (r *router) adminListUsers(w http.ResponseWriter, req *http.Request, _ Auth
 		writeSupabaseError(w, err)
 		return
 	}
-	statusByUserID, err := r.adminTodayStatuses(req.Context(), rows)
+	statusByUserID, err := r.adminStatusesForDate(req.Context(), rows, statusDate)
 	if err != nil {
 		writeSupabaseError(w, err)
 		return
@@ -75,6 +81,11 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 	input.Gender = normalizeProfileGender(input.Gender)
 	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
 	input.Status = strings.TrimSpace(input.Status)
+	statusDate, errMessage := cleanDateOnlyOrToday(input.StatusDate, "status_date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
 	if errMessage := validateAdminProfileInput(input.UserID, input.DisplayName); errMessage != "" {
 		writeError(w, http.StatusBadRequest, errMessage)
 		return
@@ -137,7 +148,7 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		writeSupabaseError(w, err)
 		return
 	}
-	if err := r.upsertAdminDailyStatus(req.Context(), createdUserID, input.Status); err != nil {
+	if err := r.upsertAdminDailyStatus(req.Context(), createdUserID, statusDate, input.Status); err != nil {
 		_ = r.deps.AdminSupabase.AdminDeleteUser(req.Context(), createdUserID)
 		writeSupabaseError(w, err)
 		return
@@ -218,7 +229,16 @@ func (r *router) adminUpdateUser(w http.ResponseWriter, req *http.Request, _ Aut
 			writeError(w, http.StatusBadRequest, "status is invalid")
 			return
 		}
-		if err := r.upsertAdminDailyStatus(req.Context(), targetID, status); err != nil {
+		statusDateInput := ""
+		if input.StatusDate != nil {
+			statusDateInput = *input.StatusDate
+		}
+		statusDate, errMessage := cleanDateOnlyOrToday(statusDateInput, "status_date")
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
+			return
+		}
+		if err := r.upsertAdminDailyStatus(req.Context(), targetID, statusDate, status); err != nil {
 			writeSupabaseError(w, err)
 			return
 		}
@@ -533,7 +553,7 @@ func (r *router) admin(next func(http.ResponseWriter, *http.Request, AuthUser)) 
 	}
 }
 
-func (r *router) adminTodayStatuses(ctx context.Context, rows []map[string]any) (map[string]string, error) {
+func (r *router) adminStatusesForDate(ctx context.Context, rows []map[string]any, statusDate string) (map[string]string, error) {
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		id, _ := row["id"].(string)
@@ -548,7 +568,7 @@ func (r *router) adminTodayStatuses(ctx context.Context, rows []map[string]any) 
 	statusQuery := url.Values{}
 	statusQuery.Set("select", "user_id,status")
 	statusQuery.Set("user_id", "in.("+strings.Join(ids, ",")+")")
-	statusQuery.Set("status_date", "eq."+time.Now().Format(time.DateOnly))
+	statusQuery.Set("status_date", "eq."+statusDate)
 	var statuses []map[string]any
 	if err := r.deps.AdminSupabase.Get(ctx, r.deps.Config.SupabaseServiceRoleKey, "daily_statuses", statusQuery, &statuses); err != nil {
 		return nil, err
@@ -564,12 +584,12 @@ func (r *router) adminTodayStatuses(ctx context.Context, rows []map[string]any) 
 	return m, nil
 }
 
-func (r *router) upsertAdminDailyStatus(ctx context.Context, targetUserID, status string) error {
+func (r *router) upsertAdminDailyStatus(ctx context.Context, targetUserID, statusDate, status string) error {
 	q := url.Values{}
 	q.Set("on_conflict", "user_id,status_date")
 	payload := map[string]any{
 		"user_id":     targetUserID,
-		"status_date": time.Now().Format(time.DateOnly),
+		"status_date": statusDate,
 		"status":      status,
 	}
 	var rows []map[string]any

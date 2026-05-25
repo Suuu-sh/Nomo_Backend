@@ -75,6 +75,7 @@ type AdminCreateUserRequest struct {
 	Gender      string `json:"gender"`
 	AvatarURL   string `json:"avatar_url"`
 	Status      string `json:"status"`
+	StatusDate  string `json:"status_date"`
 	IsPlus      bool   `json:"is_plus"`
 }
 
@@ -86,6 +87,7 @@ type AdminUpdateUserRequest struct {
 	Gender      *string `json:"gender"`
 	AvatarURL   *string `json:"avatar_url"`
 	Status      *string `json:"status"`
+	StatusDate  *string `json:"status_date"`
 	IsPlus      *bool   `json:"is_plus"`
 }
 

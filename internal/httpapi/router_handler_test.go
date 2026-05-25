@@ -195,6 +195,67 @@ func TestAdminAccessRequiresConfiguredAdminEmail(t *testing.T) {
 	}
 }
 
+func TestAdminListUsersUsesRequestedStatusDate(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/rest/v1/profiles":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"id":           otherUserID,
+				"user_id":      "friend",
+				"display_name": "Friend",
+			}})
+		case "/rest/v1/daily_statuses":
+			if got := req.URL.Query().Get("status_date"); got != "eq.2026-05-26" {
+				t.Fatalf("status_date filter = %q", got)
+			}
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"user_id": otherUserID,
+				"status":  "non_alcohol",
+			}})
+		default:
+			writeFakeJSON(w, http.StatusOK, []map[string]any{})
+		}
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake, "user@example.com").ServeHTTP(w, authedRequest(http.MethodGet, "/v1/admin/users?date=2026-05-26", ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := rows[0]["status"]; got != "non_alcohol" {
+		t.Fatalf("status = %#v", got)
+	}
+}
+
+func TestAdminUpdateUserWritesRequestedStatusDate(t *testing.T) {
+	fake := newFakeSupabase(t, nil)
+	w := httptest.NewRecorder()
+
+	testRouter(fake, "user@example.com").ServeHTTP(
+		w,
+		authedRequest(http.MethodPatch, "/v1/admin/users/"+otherUserID, `{"status":"non_alcohol","status_date":"2026-05-26"}`),
+	)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/daily_statuses")
+	if !ok {
+		t.Fatal("daily_statuses request was not sent")
+	}
+	if !strings.Contains(request.Body, `"status_date":"2026-05-26"`) {
+		t.Fatalf("daily status body missing requested date: %s", request.Body)
+	}
+	if !strings.Contains(request.Body, `"status":"non_alcohol"`) {
+		t.Fatalf("daily status body missing status: %s", request.Body)
+	}
+}
+
 func TestDeleteDrinkLogIsScopedToAuthenticatedOwner(t *testing.T) {
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/rest/v1/drink_logs" && req.Method == http.MethodDelete {
