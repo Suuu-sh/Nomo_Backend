@@ -19,6 +19,7 @@ type Dependencies struct {
 	Logger        *slog.Logger
 	Supabase      *supabase.Client
 	AdminSupabase *supabase.Client
+	FCM           *fcmSender
 }
 
 type router struct {
@@ -52,6 +53,7 @@ func (r *router) routes() {
 	r.mux.HandleFunc("POST /v1/drink-logs/{id}/report", r.auth(r.reportDrinkLog))
 	r.mux.HandleFunc("GET /v1/notifications", r.auth(r.listNotifications))
 	r.mux.HandleFunc("PATCH /v1/notifications/read-all", r.auth(r.markNotificationsRead))
+	r.mux.HandleFunc("PUT /v1/me/push-token", r.auth(r.registerPushToken))
 	r.mux.HandleFunc("GET /v1/daily-status", r.auth(r.getDailyStatus))
 	r.mux.HandleFunc("PUT /v1/daily-status", r.auth(r.upsertDailyStatus))
 	r.mux.HandleFunc("GET /v1/drink-invites/today-reservations", r.auth(r.listTodayReservations))
@@ -77,7 +79,7 @@ func (r *router) health(w http.ResponseWriter, _ *http.Request) {
 func (r *router) getProfile(w http.ResponseWriter, req *http.Request, authToken string) {
 	var rows []Profile
 	q := url.Values{}
-	q.Set("select", "id,user_id,display_name,character_key,avatar_url,is_plus")
+	q.Set("select", "id,user_id,display_name,gender,character_key,avatar_url,is_plus")
 	q.Set("id", "eq."+req.Header.Get("X-Nomo-User-ID"))
 	if err := r.deps.Supabase.Get(req.Context(), authToken, "profiles", q, &rows); err != nil {
 		writeSupabaseError(w, err)
@@ -92,8 +94,7 @@ func (r *router) getProfile(w http.ResponseWriter, req *http.Request, authToken 
 
 func (r *router) updateProfile(w http.ResponseWriter, req *http.Request, authToken string) {
 	var body map[string]any
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &body) {
 		return
 	}
 	allowed := map[string]any{}
@@ -101,6 +102,10 @@ func (r *router) updateProfile(w http.ResponseWriter, req *http.Request, authTok
 		if value, ok := body[key]; ok {
 			allowed[key] = value
 		}
+	}
+	if _, ok := body["gender"]; ok {
+		writeError(w, http.StatusBadRequest, "gender cannot be changed")
+		return
 	}
 	if value, ok := body["user_id"]; ok {
 		allowed["user_id"] = value
@@ -121,7 +126,10 @@ func (r *router) updateProfile(w http.ResponseWriter, req *http.Request, authTok
 
 func (r *router) listFriends(w http.ResponseWriter, req *http.Request, authToken string) {
 	q := url.Values{}
-	q.Set("select", "user_a_id,user_b_id,is_favorite,user_a:profiles!friendships_user_a_id_fkey(id,user_id,display_name,character_key,avatar_url,is_plus),user_b:profiles!friendships_user_b_id_fkey(id,user_id,display_name,character_key,avatar_url,is_plus)")
+	q.Set(
+		"select",
+		"user_a_id,user_b_id,is_favorite,user_a:profiles!friendships_user_a_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus),user_b:profiles!friendships_user_b_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus)",
+	)
 	q.Set("or", "(user_a_id.eq."+req.Header.Get("X-Nomo-User-ID")+",user_b_id.eq."+req.Header.Get("X-Nomo-User-ID")+")")
 	q.Set("order", "created_at.desc")
 	var rows []map[string]any
@@ -133,18 +141,22 @@ func (r *router) listFriends(w http.ResponseWriter, req *http.Request, authToken
 		writeSupabaseError(w, err)
 		return
 	}
+	if err := r.attachFriendDrinkStats(req, authToken, rows); err != nil {
+		if r.deps.Logger != nil {
+			r.deps.Logger.Warn("failed to attach friend drink stats", "error", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, rows)
 }
 
 func (r *router) updateFriendFavorite(w http.ResponseWriter, req *http.Request, authToken string) {
-	friendID := strings.TrimSpace(req.PathValue("id"))
-	if friendID == "" {
-		writeError(w, http.StatusBadRequest, "friend id is required")
+	friendID, errMessage := cleanUUID(req.PathValue("id"), "friend id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input FriendFavoriteRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	userID := req.Header.Get("X-Nomo-User-ID")
@@ -170,7 +182,7 @@ func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authTok
 		return
 	}
 
-	selectColumns := "id,owner_user_id,drank_at,place_name,memo,photo_path,link_url,is_official,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,character_key,avatar_url,is_plus),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,character_key,avatar_url,is_plus))"
+	selectColumns := "id,owner_user_id,drank_at,place_name,place_lat,place_lng,memo,caption_y,photo_path,link_url,marker_rarity,is_official,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,gender,character_key,avatar_url,is_plus))"
 	q := url.Values{}
 	q.Set("select", selectColumns)
 	q.Set("owner_user_id", "in.("+strings.Join(visibleUserIDs, ",")+")")
@@ -266,23 +278,76 @@ func drinkLogRowTime(row map[string]any) time.Time {
 	return time.Time{}
 }
 
+func cleanDrinkLogMarkerRarity(value string) string {
+	switch strings.TrimSpace(value) {
+	case "uncommon", "rare", "super_rare", "ultra_rare", "secret":
+		return strings.TrimSpace(value)
+	default:
+		return "normal"
+	}
+}
+
+func cleanDrinkLogCaptionY(value *float64) float64 {
+	if value == nil {
+		return 0.5
+	}
+	if *value < 0 {
+		return 0
+	}
+	if *value > 1 {
+		return 1
+	}
+	return *value
+}
+
 func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input CreateDrinkLogRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	friendIDs, errMessage := cleanUUIDs(input.FriendIDs, "friend id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	ownerUserID := req.Header.Get("X-Nomo-User-ID")
+	validFriends, err := r.validateDrinkLogFriendIDs(req, authToken, ownerUserID, friendIDs)
+	if err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	if !validFriends {
+		writeError(w, http.StatusForbidden, "friend_ids must be existing friends")
 		return
 	}
 	drankAt := time.Now()
 	if input.DrankAt != nil {
 		drankAt = *input.DrankAt
 	}
-	ownerUserID := req.Header.Get("X-Nomo-User-ID")
+	available, errMessage, err := r.dailyDrinkLogAvailable(req, authToken, ownerUserID, input, drankAt)
+	if err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	if !available {
+		writeError(w, http.StatusConflict, "投稿は1日1回までです")
+		return
+	}
 	payload := map[string]any{
 		"owner_user_id": ownerUserID,
 		"drank_at":      drankAt.Format(time.RFC3339),
 		"place_name":    strings.TrimSpace(input.PlaceName),
+		"place_lat":     input.PlaceLat,
+		"place_lng":     input.PlaceLng,
 		"memo":          strings.TrimSpace(input.Memo),
+		"caption_y":     cleanDrinkLogCaptionY(input.CaptionY),
 		"photo_path":    strings.TrimSpace(input.PhotoPath),
+		"marker_rarity": cleanDrinkLogMarkerRarity(input.MarkerRarity),
+		"is_official":   false,
 	}
 	var logs []DrinkLog
 	if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_logs", nil, payload, &logs); err != nil {
@@ -293,29 +358,82 @@ func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 		writeError(w, http.StatusBadGateway, "drink log insert returned no rows")
 		return
 	}
-	if len(input.FriendIDs) > 0 {
-		links := make([]map[string]string, 0, len(input.FriendIDs))
-		for _, id := range input.FriendIDs {
-			if trimmed := strings.TrimSpace(id); trimmed != "" {
-				links = append(links, map[string]string{"drink_log_id": logs[0].ID, "friend_user_id": trimmed})
-			}
-		}
+	if len(friendIDs) > 0 {
+		links := drinkLogFriendLinks(logs[0].ID, friendIDs)
 		var ignored []map[string]any
-		if len(links) > 0 {
-			if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_friends", nil, links, &ignored); err != nil {
-				writeSupabaseError(w, err)
-				return
-			}
+		if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_friends", nil, links, &ignored); err != nil {
+			writeSupabaseError(w, err)
+			return
 		}
 	}
-	r.createDrinkLogTaggedNotifications(req, authToken, logs[0].ID, ownerUserID, input.FriendIDs)
+	r.createDrinkLogTaggedNotifications(req, authToken, logs[0].ID, ownerUserID, friendIDs)
 	writeJSON(w, http.StatusCreated, logs[0])
 }
 
+func (r *router) dailyDrinkLogAvailable(req *http.Request, authToken, ownerUserID string, input CreateDrinkLogRequest, drankAt time.Time) (bool, string, error) {
+	start, end, errMessage := drinkLogDayWindow(input, drankAt)
+	if errMessage != "" {
+		return false, errMessage, nil
+	}
+	q := url.Values{}
+	q.Set("select", "id")
+	q.Set("owner_user_id", "eq."+ownerUserID)
+	q.Set("is_official", "eq.false")
+	q.Add("drank_at", "gte."+start.Format(time.RFC3339))
+	q.Add("drank_at", "lt."+end.Format(time.RFC3339))
+	q.Set("limit", "1")
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
+		return false, "", err
+	}
+	return len(rows) == 0, "", nil
+}
+
+func drinkLogDayWindow(input CreateDrinkLogRequest, drankAt time.Time) (time.Time, time.Time, string) {
+	drankOn := strings.TrimSpace(input.DrankOn)
+	if drankOn == "" {
+		utc := drankAt.UTC()
+		start := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+		return start, start.AddDate(0, 0, 1), ""
+	}
+
+	day, err := time.Parse(time.DateOnly, drankOn)
+	if err != nil {
+		return time.Time{}, time.Time{}, "drank_on must be YYYY-MM-DD"
+	}
+	offsetMinutes := 0
+	if input.TimezoneOffsetMinutes != nil {
+		offsetMinutes = *input.TimezoneOffsetMinutes
+	}
+	if offsetMinutes < -14*60 || offsetMinutes > 14*60 {
+		return time.Time{}, time.Time{}, "timezone_offset_minutes is out of range"
+	}
+	location := time.FixedZone("client", offsetMinutes*60)
+	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location)
+	end := start.AddDate(0, 0, 1)
+	return start.UTC(), end.UTC(), ""
+}
+
+func (r *router) validateDrinkLogFriendIDs(req *http.Request, authToken, ownerUserID string, friendIDs []string) (bool, error) {
+	for _, friendID := range friendIDs {
+		if friendID == ownerUserID {
+			return false, nil
+		}
+		ok, err := r.friendshipExists(req, authToken, ownerUserID, friendID)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	q := url.Values{}
@@ -334,9 +452,10 @@ func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 }
 
 func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
-	date := req.URL.Query().Get("date")
-	if date == "" {
-		date = time.Now().Format(time.DateOnly)
+	date, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get("date"), "date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
 	}
 	q := url.Values{}
 	q.Set("select", "user_id,status_date,status,updated_at")
@@ -352,20 +471,22 @@ func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authTo
 
 func (r *router) upsertDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input DailyStatusRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	if input.StatusDate == "" {
-		input.StatusDate = time.Now().Format(time.DateOnly)
+	statusDate, errMessage := cleanDateOnlyOrToday(input.StatusDate, "status_date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
 	}
+	input.Status = strings.TrimSpace(input.Status)
 	if !isValidDailyStatus(input.Status) {
 		writeError(w, http.StatusBadRequest, "status is invalid")
 		return
 	}
 	q := url.Values{}
 	q.Set("on_conflict", "user_id,status_date")
-	payload := map[string]any{"user_id": req.Header.Get("X-Nomo-User-ID"), "status_date": input.StatusDate, "status": input.Status}
+	payload := map[string]any{"user_id": req.Header.Get("X-Nomo-User-ID"), "status_date": statusDate, "status": input.Status}
 	var rows []map[string]any
 	if err := r.deps.Supabase.Upsert(req.Context(), authToken, "daily_statuses", q, payload, &rows); err != nil {
 		writeSupabaseError(w, err)
@@ -387,8 +508,9 @@ func (r *router) auth(next func(http.ResponseWriter, *http.Request, string)) htt
 			return
 		}
 		userID := strings.TrimSpace(req.Header.Get("X-Nomo-User-ID"))
-		if userID == "" {
-			writeError(w, http.StatusBadRequest, "X-Nomo-User-ID header is required")
+		cleanUserID, errMessage := cleanUUID(userID, "X-Nomo-User-ID")
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
 			return
 		}
 		var authUser AuthUser
@@ -396,15 +518,16 @@ func (r *router) auth(next func(http.ResponseWriter, *http.Request, string)) htt
 			writeSupabaseError(w, err)
 			return
 		}
-		if authUser.ID == "" {
+		authUserID, errMessage := cleanUUID(authUser.ID, "auth user id")
+		if errMessage != "" {
 			writeError(w, http.StatusUnauthorized, "invalid auth user")
 			return
 		}
-		if userID != authUser.ID {
+		if cleanUserID != authUserID {
 			writeError(w, http.StatusForbidden, "auth user mismatch")
 			return
 		}
-		req.Header.Set("X-Nomo-User-ID", authUser.ID)
+		req.Header.Set("X-Nomo-User-ID", authUserID)
 		next(w, req, token)
 	}
 }
@@ -451,8 +574,27 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeSupabaseError(w http.ResponseWriter, err error) {
 	var apiErr supabase.APIError
 	if errors.As(err, &apiErr) {
-		writeError(w, apiErr.StatusCode, apiErr.Body)
+		writeError(w, apiErr.StatusCode, safeSupabaseErrorMessage(apiErr.StatusCode))
 		return
 	}
-	writeError(w, http.StatusBadGateway, err.Error())
+	writeError(w, http.StatusBadGateway, "upstream service error")
+}
+
+func safeSupabaseErrorMessage(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication failed"
+	case status == http.StatusForbidden:
+		return "access denied"
+	case status == http.StatusNotFound:
+		return "resource not found"
+	case status == http.StatusConflict:
+		return "request conflicts with existing data"
+	case status == http.StatusTooManyRequests:
+		return "too many requests"
+	case status >= 500:
+		return "upstream service error"
+	default:
+		return "request rejected by upstream service"
+	}
 }

@@ -1,19 +1,20 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
-const adminEmail = "yisshiki39@gmail.com"
 const officialProfileUserID = "nomo_official"
 const officialProfileDisplayName = "Nomo公式"
 const officialProfileEmail = "nomo-official@official.nomo.app"
@@ -30,8 +31,17 @@ func (r *router) adminMe(w http.ResponseWriter, req *http.Request, adminUser Aut
 }
 
 func (r *router) adminListUsers(w http.ResponseWriter, req *http.Request, _ AuthUser) {
+	statusDate, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get("date"), "date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+
 	q := url.Values{}
-	q.Set("select", "id,user_id,display_name,character_key,avatar_url,is_plus,created_at,updated_at")
+	q.Set(
+		"select",
+		"id,user_id,display_name,gender,character_key,avatar_url,is_plus,created_at,updated_at",
+	)
 	q.Set("order", "created_at.desc")
 	q.Set("limit", "80")
 	if search := sanitizePostgRESTSearch(req.URL.Query().Get("search")); search != "" {
@@ -43,22 +53,45 @@ func (r *router) adminListUsers(w http.ResponseWriter, req *http.Request, _ Auth
 		writeSupabaseError(w, err)
 		return
 	}
+	statusByUserID, err := r.adminStatusesForDate(req.Context(), rows, statusDate)
+	if err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		status := statusByUserID[id]
+		if strings.TrimSpace(status) == "" {
+			status = "unselected"
+		}
+		row["status"] = status
+	}
 	writeJSON(w, http.StatusOK, rows)
 }
 
 func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ AuthUser) {
 	var input AdminCreateUserRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	input.Email = strings.TrimSpace(input.Email)
 	input.Password = strings.TrimSpace(input.Password)
 	input.UserID = strings.TrimSpace(input.UserID)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.Gender = normalizeProfileGender(input.Gender)
 	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
+	input.Status = strings.TrimSpace(input.Status)
+	statusDate, errMessage := cleanDateOnlyOrToday(input.StatusDate, "status_date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
 	if errMessage := validateAdminProfileInput(input.UserID, input.DisplayName); errMessage != "" {
 		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	if !isValidProfileGender(input.Gender) {
+		writeError(w, http.StatusBadRequest, "gender must be male, female, or unspecified")
 		return
 	}
 	if !strings.Contains(input.Email, "@") {
@@ -69,6 +102,13 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
 		return
 	}
+	if input.Status == "" {
+		input.Status = "unselected"
+	}
+	if !isValidDailyStatus(input.Status) {
+		writeError(w, http.StatusBadRequest, "status is invalid")
+		return
+	}
 
 	authPayload := map[string]any{
 		"email":         input.Email,
@@ -77,6 +117,7 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		"user_metadata": map[string]any{
 			"display_name": input.DisplayName,
 			"user_id":      input.UserID,
+			"gender":       input.Gender,
 		},
 	}
 	var authResp map[string]any
@@ -94,6 +135,7 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		"id":            createdUserID,
 		"user_id":       input.UserID,
 		"display_name":  input.DisplayName,
+		"gender":        input.Gender,
 		"character_key": "avatar",
 		"avatar_url":    input.AvatarURL,
 		"is_plus":       input.IsPlus,
@@ -106,19 +148,23 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		writeSupabaseError(w, err)
 		return
 	}
+	if err := r.upsertAdminDailyStatus(req.Context(), createdUserID, statusDate, input.Status); err != nil {
+		_ = r.deps.AdminSupabase.AdminDeleteUser(req.Context(), createdUserID)
+		writeSupabaseError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, firstMap(profiles, profilePayload))
 }
 
 func (r *router) adminUpdateUser(w http.ResponseWriter, req *http.Request, _ AuthUser) {
-	targetID := strings.TrimSpace(req.PathValue("id"))
-	if targetID == "" {
-		writeError(w, http.StatusBadRequest, "user id is required")
+	targetID, errMessage := cleanUUID(req.PathValue("id"), "user id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 
 	var input AdminUpdateUserRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 
@@ -163,11 +209,39 @@ func (r *router) adminUpdateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		profilePayload["display_name"] = displayName
 		userMeta["display_name"] = displayName
 	}
+	if input.Gender != nil {
+		writeError(w, http.StatusBadRequest, "gender cannot be changed")
+		return
+	}
 	if input.AvatarURL != nil {
 		profilePayload["avatar_url"] = strings.TrimSpace(*input.AvatarURL)
 	}
 	if input.IsPlus != nil {
 		profilePayload["is_plus"] = *input.IsPlus
+	}
+	if input.Status != nil {
+		status := strings.TrimSpace(*input.Status)
+		if status == "" {
+			writeError(w, http.StatusBadRequest, "status is required")
+			return
+		}
+		if !isValidDailyStatus(status) {
+			writeError(w, http.StatusBadRequest, "status is invalid")
+			return
+		}
+		statusDateInput := ""
+		if input.StatusDate != nil {
+			statusDateInput = *input.StatusDate
+		}
+		statusDate, errMessage := cleanDateOnlyOrToday(statusDateInput, "status_date")
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
+			return
+		}
+		if err := r.upsertAdminDailyStatus(req.Context(), targetID, statusDate, status); err != nil {
+			writeSupabaseError(w, err)
+			return
+		}
 	}
 	if len(userMeta) > 0 {
 		authPayload["user_metadata"] = userMeta
@@ -197,9 +271,9 @@ func (r *router) adminUpdateUser(w http.ResponseWriter, req *http.Request, _ Aut
 }
 
 func (r *router) adminDeleteUser(w http.ResponseWriter, req *http.Request, adminUser AuthUser) {
-	targetID := strings.TrimSpace(req.PathValue("id"))
-	if targetID == "" {
-		writeError(w, http.StatusBadRequest, "user id is required")
+	targetID, errMessage := cleanUUID(req.PathValue("id"), "user id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	if targetID == adminUser.ID {
@@ -215,7 +289,7 @@ func (r *router) adminDeleteUser(w http.ResponseWriter, req *http.Request, admin
 
 func (r *router) adminListDrinkLogs(w http.ResponseWriter, req *http.Request, _ AuthUser) {
 	q := url.Values{}
-	q.Set("select", "id,owner_user_id,drank_at,place_name,memo,photo_path,link_url,is_official,created_at,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,avatar_url,is_plus)")
+	q.Set("select", "id,owner_user_id,drank_at,place_name,place_lat,place_lng,memo,caption_y,photo_path,link_url,marker_rarity,is_official,created_at,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,avatar_url,is_plus)")
 	q.Set("order", "created_at.desc")
 	q.Set("limit", "80")
 	var rows []map[string]any
@@ -228,8 +302,7 @@ func (r *router) adminListDrinkLogs(w http.ResponseWriter, req *http.Request, _ 
 
 func (r *router) adminCreateDrinkLog(w http.ResponseWriter, req *http.Request, _ AuthUser) {
 	var input AdminCreateDrinkLogRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	input.OwnerUserID = strings.TrimSpace(input.OwnerUserID)
@@ -245,6 +318,19 @@ func (r *router) adminCreateDrinkLog(w http.ResponseWriter, req *http.Request, _
 		writeError(w, http.StatusBadRequest, "owner_user_id is required")
 		return
 	}
+	if !input.IsOfficial {
+		ownerID, errMessage := cleanUUID(input.OwnerUserID, "owner_user_id")
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
+			return
+		}
+		input.OwnerUserID = ownerID
+	}
+	friendIDs, errMessage := cleanUUIDs(input.FriendIDs, "friend id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
 	drankAt := input.DrankAt
 	if drankAt.IsZero() {
 		drankAt = time.Now()
@@ -254,8 +340,10 @@ func (r *router) adminCreateDrinkLog(w http.ResponseWriter, req *http.Request, _
 		"drank_at":      drankAt.Format(time.RFC3339),
 		"place_name":    strings.TrimSpace(input.PlaceName),
 		"memo":          strings.TrimSpace(input.Memo),
+		"caption_y":     cleanDrinkLogCaptionY(input.CaptionY),
 		"photo_path":    strings.TrimSpace(input.PhotoPath),
 		"link_url":      strings.TrimSpace(input.LinkURL),
+		"marker_rarity": cleanDrinkLogMarkerRarity(input.MarkerRarity),
 		"is_official":   input.IsOfficial,
 	}
 	var rows []DrinkLog
@@ -267,30 +355,29 @@ func (r *router) adminCreateDrinkLog(w http.ResponseWriter, req *http.Request, _
 		writeError(w, http.StatusBadGateway, "drink log insert returned no rows")
 		return
 	}
-	if err := r.adminInsertDrinkLogFriends(req, rows[0].ID, input.FriendIDs); err != nil {
+	if err := r.adminInsertDrinkLogFriends(req, rows[0].ID, friendIDs); err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
-	r.createDrinkLogTaggedNotifications(req, r.deps.Config.SupabaseServiceRoleKey, rows[0].ID, input.OwnerUserID, input.FriendIDs)
+	r.createDrinkLogTaggedNotifications(req, r.deps.Config.SupabaseServiceRoleKey, rows[0].ID, input.OwnerUserID, friendIDs)
 	writeJSON(w, http.StatusCreated, rows[0])
 }
 
 func (r *router) adminUpdateDrinkLog(w http.ResponseWriter, req *http.Request, _ AuthUser) {
-	logID := strings.TrimSpace(req.PathValue("id"))
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input AdminUpdateDrinkLogRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	payload := map[string]any{}
 	if input.OwnerUserID != nil {
-		ownerID := strings.TrimSpace(*input.OwnerUserID)
-		if ownerID == "" {
-			writeError(w, http.StatusBadRequest, "owner_user_id is required")
+		ownerID, errMessage := cleanUUID(*input.OwnerUserID, "owner_user_id")
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
 			return
 		}
 		payload["owner_user_id"] = ownerID
@@ -304,11 +391,17 @@ func (r *router) adminUpdateDrinkLog(w http.ResponseWriter, req *http.Request, _
 	if input.Memo != nil {
 		payload["memo"] = strings.TrimSpace(*input.Memo)
 	}
+	if input.CaptionY != nil {
+		payload["caption_y"] = cleanDrinkLogCaptionY(input.CaptionY)
+	}
 	if input.PhotoPath != nil {
 		payload["photo_path"] = strings.TrimSpace(*input.PhotoPath)
 	}
 	if input.LinkURL != nil {
 		payload["link_url"] = strings.TrimSpace(*input.LinkURL)
+	}
+	if input.MarkerRarity != nil {
+		payload["marker_rarity"] = cleanDrinkLogMarkerRarity(*input.MarkerRarity)
 	}
 	if input.IsOfficial != nil {
 		payload["is_official"] = *input.IsOfficial
@@ -337,7 +430,7 @@ func (r *router) adminUpdateDrinkLog(w http.ResponseWriter, req *http.Request, _
 
 func (r *router) ensureOfficialProfile(req *http.Request) (string, error) {
 	q := url.Values{}
-	q.Set("select", "id,user_id,display_name,character_key,avatar_url,is_plus")
+	q.Set("select", "id,user_id,display_name,gender,character_key,avatar_url,is_plus")
 	q.Set("user_id", "eq."+officialProfileUserID)
 	q.Set("limit", "1")
 	var profiles []Profile
@@ -359,6 +452,7 @@ func (r *router) ensureOfficialProfile(req *http.Request) (string, error) {
 		"user_metadata": map[string]any{
 			"display_name": officialProfileDisplayName,
 			"user_id":      officialProfileUserID,
+			"gender":       "unspecified",
 		},
 	}
 	var authResp map[string]any
@@ -374,6 +468,7 @@ func (r *router) ensureOfficialProfile(req *http.Request) (string, error) {
 		"id":            createdUserID,
 		"user_id":       officialProfileUserID,
 		"display_name":  officialProfileDisplayName,
+		"gender":        "unspecified",
 		"character_key": "avatar",
 		"avatar_url":    "",
 		"is_plus":       true,
@@ -397,9 +492,9 @@ func randomAdminPassword() (string, error) {
 }
 
 func (r *router) adminDeleteDrinkLog(w http.ResponseWriter, req *http.Request, _ AuthUser) {
-	logID := strings.TrimSpace(req.PathValue("id"))
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	q := url.Values{}
@@ -433,14 +528,23 @@ func (r *router) admin(next func(http.ResponseWriter, *http.Request, AuthUser)) 
 			writeSupabaseError(w, err)
 			return
 		}
-		if authUser.ID == "" {
+		authUserID, errMessage := cleanUUID(authUser.ID, "auth user id")
+		if errMessage != "" {
 			writeError(w, http.StatusUnauthorized, "invalid auth user")
 			return
 		}
-		if headerUserID := strings.TrimSpace(req.Header.Get("X-Nomo-User-ID")); headerUserID != "" && headerUserID != authUser.ID {
-			writeError(w, http.StatusForbidden, "auth user mismatch")
-			return
+		if headerUserID := strings.TrimSpace(req.Header.Get("X-Nomo-User-ID")); headerUserID != "" {
+			cleanHeaderUserID, errMessage := cleanUUID(headerUserID, "X-Nomo-User-ID")
+			if errMessage != "" {
+				writeError(w, http.StatusBadRequest, errMessage)
+				return
+			}
+			if cleanHeaderUserID != authUserID {
+				writeError(w, http.StatusForbidden, "auth user mismatch")
+				return
+			}
 		}
+		authUser.ID = authUserID
 		if !r.isAdminUser(authUser) {
 			writeError(w, http.StatusForbidden, "admin access required")
 			return
@@ -449,17 +553,64 @@ func (r *router) admin(next func(http.ResponseWriter, *http.Request, AuthUser)) 
 	}
 }
 
+func (r *router) adminStatusesForDate(ctx context.Context, rows []map[string]any, statusDate string) (map[string]string, error) {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+	sort.Strings(ids)
+	statusQuery := url.Values{}
+	statusQuery.Set("select", "user_id,status")
+	statusQuery.Set("user_id", "in.("+strings.Join(ids, ",")+")")
+	statusQuery.Set("status_date", "eq."+statusDate)
+	var statuses []map[string]any
+	if err := r.deps.AdminSupabase.Get(ctx, r.deps.Config.SupabaseServiceRoleKey, "daily_statuses", statusQuery, &statuses); err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	for _, status := range statuses {
+		userID, _ := status["user_id"].(string)
+		statusKey, _ := status["status"].(string)
+		if userID != "" && strings.TrimSpace(statusKey) != "" {
+			m[userID] = statusKey
+		}
+	}
+	return m, nil
+}
+
+func (r *router) upsertAdminDailyStatus(ctx context.Context, targetUserID, statusDate, status string) error {
+	q := url.Values{}
+	q.Set("on_conflict", "user_id,status_date")
+	payload := map[string]any{
+		"user_id":     targetUserID,
+		"status_date": statusDate,
+		"status":      status,
+	}
+	var rows []map[string]any
+	return r.deps.AdminSupabase.Upsert(ctx, r.deps.Config.SupabaseServiceRoleKey, "daily_statuses", q, payload, &rows)
+}
+
 func (r *router) isAdminUser(user AuthUser) bool {
-	return strings.EqualFold(strings.TrimSpace(user.Email), adminEmail)
+	userEmail := strings.TrimSpace(user.Email)
+	if userEmail == "" {
+		return false
+	}
+	for _, adminEmail := range r.deps.Config.AdminEmails {
+		if strings.EqualFold(userEmail, adminEmail) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *router) adminInsertDrinkLogFriends(req *http.Request, drinkLogID string, friendIDs []string) error {
-	links := make([]map[string]string, 0, len(friendIDs))
-	for _, id := range friendIDs {
-		if trimmed := strings.TrimSpace(id); trimmed != "" {
-			links = append(links, map[string]string{"drink_log_id": drinkLogID, "friend_user_id": trimmed})
-		}
-	}
+	links := drinkLogFriendLinks(drinkLogID, friendIDs)
 	if len(links) == 0 {
 		return nil
 	}
@@ -498,7 +649,12 @@ func firstMap(rows []map[string]any, fallback map[string]any) map[string]any {
 }
 
 func sanitizePostgRESTSearch(value string) string {
-	value = strings.TrimSpace(value)
-	replacer := strings.NewReplacer("*", "", "(", "", ")", "", ",", "", "\"", "", "'", "")
-	return replacer.Replace(value)
+	value = shortText(value, maxSearchRunes)
+	var builder strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsSpace(r) || r == '_' || r == '-' {
+			builder.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(builder.String()), " ")
 }

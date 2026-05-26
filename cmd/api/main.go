@@ -25,10 +25,20 @@ func main() {
 	if cfg.SupabaseServiceRoleKey != "" {
 		adminSupabaseClient = supabase.NewClient(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey, httpClient)
 	}
+	fcm, err := httpapi.NewFCMSender(cfg.FCMServiceAccountJSON, httpClient)
+	if err != nil {
+		logger.Error("fcm configuration error", "error", err)
+		os.Exit(1)
+	}
+
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(httpapi.Dependencies{Config: cfg, Logger: logger, Supabase: supabaseClient, AdminSupabase: adminSupabaseClient}),
+		Handler:           httpapi.NewRouter(httpapi.Dependencies{Config: cfg, Logger: logger, Supabase: supabaseClient, AdminSupabase: adminSupabaseClient, FCM: fcm}),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      20 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	logger.Info("starting nomo backend", "port", cfg.Port, "env", cfg.Environment)

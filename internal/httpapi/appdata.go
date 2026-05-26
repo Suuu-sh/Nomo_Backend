@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -16,6 +16,7 @@ import (
 type ProfileSaveRequest struct {
 	UserID       string `json:"user_id"`
 	DisplayName  string `json:"display_name"`
+	Gender       string `json:"gender"`
 	CharacterKey string `json:"character_key"`
 	AvatarURL    string `json:"avatar_url"`
 }
@@ -44,8 +45,7 @@ type DrinkLogReportRequest struct {
 
 func (r *router) upsertProfile(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input ProfileSaveRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	input.normalize()
@@ -77,7 +77,7 @@ func (r *router) getProfileByUserID(w http.ResponseWriter, req *http.Request, au
 	}
 
 	q := url.Values{}
-	q.Set("select", "id,user_id,display_name,character_key,avatar_url,is_plus")
+	q.Set("select", "id,user_id,display_name,gender,character_key,avatar_url,is_plus")
 	q.Set("user_id", "eq."+userID)
 	q.Set("limit", "1")
 	var rows []Profile
@@ -94,19 +94,20 @@ func (r *router) getProfileByUserID(w http.ResponseWriter, req *http.Request, au
 
 func (r *router) createFriendship(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input FriendIDRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	friendID := strings.TrimSpace(input.FriendID)
 	if friendID == "" {
 		friendID = strings.TrimSpace(input.ToUserID)
 	}
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if friendID == "" {
-		writeError(w, http.StatusBadRequest, "friend_id is required")
+	var errMessage string
+	friendID, errMessage = cleanUUID(friendID, "friend_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
+	userID := req.Header.Get("X-Nomo-User-ID")
 	if friendID == userID {
 		writeError(w, http.StatusBadRequest, "cannot add yourself as a friend")
 		return
@@ -124,12 +125,12 @@ func (r *router) createFriendship(w http.ResponseWriter, req *http.Request, auth
 }
 
 func (r *router) getFriendRequestStatus(w http.ResponseWriter, req *http.Request, authToken string) {
-	friendID := strings.TrimSpace(req.URL.Query().Get("friend_id"))
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if friendID == "" {
-		writeError(w, http.StatusBadRequest, "friend_id is required")
+	friendID, errMessage := cleanUUID(req.URL.Query().Get("friend_id"), "friend_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
+	userID := req.Header.Get("X-Nomo-User-ID")
 	if friendID == userID {
 		writeJSON(w, http.StatusOK, map[string]any{"already_friend": false, "request_state": "self"})
 		return
@@ -168,19 +169,20 @@ func (r *router) getFriendRequestStatus(w http.ResponseWriter, req *http.Request
 
 func (r *router) createFriendRequest(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input FriendIDRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	toUserID := strings.TrimSpace(input.ToUserID)
 	if toUserID == "" {
 		toUserID = strings.TrimSpace(input.FriendID)
 	}
-	fromUserID := req.Header.Get("X-Nomo-User-ID")
-	if toUserID == "" {
-		writeError(w, http.StatusBadRequest, "to_user_id is required")
+	var errMessage string
+	toUserID, errMessage = cleanUUID(toUserID, "to_user_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
+	fromUserID := req.Header.Get("X-Nomo-User-ID")
 	if toUserID == fromUserID {
 		writeError(w, http.StatusBadRequest, "cannot send a friend request to yourself")
 		return
@@ -210,14 +212,13 @@ func (r *router) createFriendRequest(w http.ResponseWriter, req *http.Request, a
 }
 
 func (r *router) updateFriendRequest(w http.ResponseWriter, req *http.Request, authToken string) {
-	requestID := strings.TrimSpace(req.PathValue("id"))
-	if requestID == "" {
-		writeError(w, http.StatusBadRequest, "friend request id is required")
+	requestID, errMessage := cleanUUID(req.PathValue("id"), "friend request id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input FriendRequestUpdateRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	status := strings.TrimSpace(input.Status)
@@ -226,9 +227,15 @@ func (r *router) updateFriendRequest(w http.ResponseWriter, req *http.Request, a
 		return
 	}
 
+	userID := req.Header.Get("X-Nomo-User-ID")
 	q := url.Values{}
 	q.Set("id", "eq."+requestID)
 	q.Set("status", "eq.pending")
+	if status == "cancelled" {
+		q.Set("from_user_id", "eq."+userID)
+	} else {
+		q.Set("to_user_id", "eq."+userID)
+	}
 	payload := map[string]any{
 		"status":       status,
 		"responded_at": time.Now().UTC().Format(time.RFC3339),
@@ -257,10 +264,10 @@ func (r *router) updateFriendRequest(w http.ResponseWriter, req *http.Request, a
 }
 
 func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
 	userID := req.Header.Get("X-Nomo-User-ID")
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	payload := map[string]any{"drink_log_id": logID, "user_id": userID}
@@ -281,10 +288,10 @@ func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToke
 }
 
 func (r *router) unlikeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
 	userID := req.Header.Get("X-Nomo-User-ID")
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	q := url.Values{}
@@ -299,15 +306,14 @@ func (r *router) unlikeDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 }
 
 func (r *router) reportDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID := strings.TrimSpace(req.PathValue("id"))
+	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
 	userID := req.Header.Get("X-Nomo-User-ID")
-	if logID == "" {
-		writeError(w, http.StatusBadRequest, "drink log id is required")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input DrinkLogReportRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	reason := strings.TrimSpace(input.Reason)
@@ -467,23 +473,30 @@ func (r *router) listIncomingPendingInvites(w http.ResponseWriter, req *http.Req
 
 func (r *router) createDrinkInvite(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input DrinkInviteRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	fromUserID := req.Header.Get("X-Nomo-User-ID")
-	toUserID := strings.TrimSpace(input.ToUserID)
-	if toUserID == "" {
-		writeError(w, http.StatusBadRequest, "to_user_id is required")
+	toUserID, errMessage := cleanUUID(input.ToUserID, "to_user_id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	if toUserID == fromUserID {
 		writeError(w, http.StatusBadRequest, "cannot invite yourself")
 		return
 	}
-	inviteDate := strings.TrimSpace(input.InviteDate)
-	if inviteDate == "" {
-		inviteDate = time.Now().Format(time.DateOnly)
+	inviteDate, errMessage := cleanDateOnlyOrToday(input.InviteDate, "invite_date")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	if blockedMessage, err := r.blockedInviteStatusMessage(req.Context(), authToken, toUserID, inviteDate); err != nil {
+		writeSupabaseError(w, err)
+		return
+	} else if blockedMessage != "" {
+		writeError(w, http.StatusConflict, blockedMessage)
+		return
 	}
 
 	q := url.Values{}
@@ -522,15 +535,38 @@ func (r *router) createDrinkInvite(w http.ResponseWriter, req *http.Request, aut
 	writeJSON(w, http.StatusCreated, row)
 }
 
+func (r *router) blockedInviteStatusMessage(ctx context.Context, authToken, userID, inviteDate string) (string, error) {
+	q := url.Values{}
+	q.Set("select", "status")
+	q.Set("user_id", "eq."+userID)
+	q.Set("status_date", "eq."+inviteDate)
+	q.Set("limit", "1")
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(ctx, authToken, "daily_statuses", q, &rows); err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	status, _ := rows[0]["status"].(string)
+	switch strings.TrimSpace(status) {
+	case "liver_rest":
+		return "相手が休肝日のため今日は誘えません。", nil
+	case "has_plans":
+		return "相手に予定があるため今日は誘えません。", nil
+	default:
+		return "", nil
+	}
+}
+
 func (r *router) updateDrinkInvite(w http.ResponseWriter, req *http.Request, authToken string) {
-	inviteID := strings.TrimSpace(req.PathValue("id"))
-	if inviteID == "" {
-		writeError(w, http.StatusBadRequest, "drink invite id is required")
+	inviteID, errMessage := cleanUUID(req.PathValue("id"), "drink invite id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
 	var input DrinkInviteUpdateRequest
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONBody(w, req, &input) {
 		return
 	}
 	status := strings.TrimSpace(input.Status)
@@ -562,11 +598,12 @@ func (r *router) updateDrinkInvite(w http.ResponseWriter, req *http.Request, aut
 	writeJSON(w, http.StatusOK, rows[0])
 }
 
-const drinkInviteSelect = "id,from_user_id,to_user_id,invite_date,status,from_user:profiles!drink_invites_from_user_id_fkey(id,display_name,user_id,avatar_url),to_user:profiles!drink_invites_to_user_id_fkey(id,display_name,user_id,avatar_url)"
+const drinkInviteSelect = "id,from_user_id,to_user_id,invite_date,status,from_user:profiles!drink_invites_from_user_id_fkey(id,display_name,user_id,gender,avatar_url),to_user:profiles!drink_invites_to_user_id_fkey(id,display_name,user_id,gender,avatar_url)"
 
 func (input *ProfileSaveRequest) normalize() {
 	input.UserID = strings.TrimSpace(input.UserID)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.Gender = normalizeProfileGender(input.Gender)
 	input.CharacterKey = strings.TrimSpace(input.CharacterKey)
 	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
 	if input.CharacterKey == "" {
@@ -582,6 +619,9 @@ func (input ProfileSaveRequest) validate() string {
 	if nameLength < 1 || nameLength > 40 {
 		return "display_name must be 1-40 characters"
 	}
+	if !isValidProfileGender(input.Gender) {
+		return "gender must be male, female, or unspecified"
+	}
 	return ""
 }
 
@@ -590,6 +630,7 @@ func (input ProfileSaveRequest) profilePayload(authUserID string) map[string]any
 		"id":            authUserID,
 		"user_id":       input.UserID,
 		"display_name":  input.DisplayName,
+		"gender":        input.Gender,
 		"character_key": input.CharacterKey,
 		"avatar_url":    input.AvatarURL,
 		"updated_at":    time.Now().UTC().Format(time.RFC3339),
@@ -620,6 +661,17 @@ func validateProfilePayload(_ *http.Request, _ string, payload map[string]any) s
 		}
 		payload["display_name"] = displayName
 	}
+	if raw, ok := payload["gender"]; ok {
+		gender, ok := raw.(string)
+		if !ok {
+			return "gender must be a string"
+		}
+		gender = normalizeProfileGender(gender)
+		if !isValidProfileGender(gender) {
+			return "gender must be male, female, or unspecified"
+		}
+		payload["gender"] = gender
+	}
 	if raw, ok := payload["character_key"]; ok {
 		value, ok := raw.(string)
 		if !ok {
@@ -633,11 +685,32 @@ func validateProfilePayload(_ *http.Request, _ string, payload map[string]any) s
 			return "avatar_url must be a string"
 		}
 		if ok {
-			payload["avatar_url"] = strings.TrimSpace(value)
+			value = strings.TrimSpace(value)
+			if len(value) > 4096 {
+				return "avatar_url is too long"
+			}
+			payload["avatar_url"] = value
 		}
 	}
 	payload["updated_at"] = time.Now().UTC().Format(time.RFC3339)
 	return ""
+}
+
+func normalizeProfileGender(value string) string {
+	gender := strings.ToLower(strings.TrimSpace(value))
+	if gender == "" {
+		return "unspecified"
+	}
+	return gender
+}
+
+func isValidProfileGender(value string) bool {
+	switch normalizeProfileGender(value) {
+	case "unspecified", "male", "female":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *router) attachTodayStatuses(req *http.Request, authToken string, rows []map[string]any) error {
@@ -657,14 +730,14 @@ func (r *router) attachTodayStatuses(req *http.Request, authToken string, rows [
 	if len(profiles) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(profiles))
+	profileIDs := make([]string, 0, len(profiles))
 	for id := range profiles {
-		ids = append(ids, id)
+		profileIDs = append(profileIDs, id)
 	}
-	sort.Strings(ids)
+	sort.Strings(profileIDs)
 	q := url.Values{}
 	q.Set("select", "user_id,status")
-	q.Set("user_id", "in.("+strings.Join(ids, ",")+")")
+	q.Set("user_id", "in.("+strings.Join(profileIDs, ",")+")")
 	q.Set("status_date", "eq."+dateOnlyParam(req, "date"))
 	var statuses []map[string]any
 	if err := r.deps.Supabase.Get(req.Context(), authToken, "daily_statuses", q, &statuses); err != nil {
@@ -674,10 +747,137 @@ func (r *router) attachTodayStatuses(req *http.Request, authToken string, rows [
 		userID, _ := status["user_id"].(string)
 		statusKey, _ := status["status"].(string)
 		if profile := profiles[userID]; profile != nil {
-			profile["status_key"] = statusKey
+			if strings.TrimSpace(statusKey) != "" {
+				profile["status_key"] = statusKey
+			}
+		}
+	}
+
+	for _, profile := range profiles {
+		if _, hasStatus := profile["status_key"]; hasStatus {
+			continue
+		}
+		if status, ok := profile["status"].(string); ok && strings.TrimSpace(status) != "" {
+			profile["status_key"] = status
 		}
 	}
 	return nil
+}
+
+func (r *router) attachFriendDrinkStats(req *http.Request, authToken string, rows []map[string]any) error {
+	currentUserID := req.Header.Get("X-Nomo-User-ID")
+	profiles := map[string]map[string]any{}
+	for _, row := range rows {
+		for _, key := range []string{"user_a", "user_b"} {
+			profile, ok := row[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := profile["id"].(string)
+			if id != "" && id != currentUserID {
+				profiles[id] = profile
+			}
+		}
+	}
+	if len(profiles) == 0 {
+		return nil
+	}
+
+	friendIDs := make([]string, 0, len(profiles))
+	for id := range profiles {
+		friendIDs = append(friendIDs, id)
+	}
+	sort.Strings(friendIDs)
+
+	stats := make(map[string]*friendDrinkStats, len(friendIDs))
+	for _, id := range friendIDs {
+		stats[id] = &friendDrinkStats{}
+	}
+
+	if err := r.attachOwnedDrinkStats(req, authToken, currentUserID, friendIDs, stats); err != nil {
+		return err
+	}
+	if err := r.attachTaggedDrinkStats(req, authToken, currentUserID, friendIDs, stats); err != nil {
+		return err
+	}
+
+	for id, profile := range profiles {
+		stat := stats[id]
+		if stat == nil {
+			profile["total_drink_count"] = 0
+			continue
+		}
+		profile["total_drink_count"] = stat.count
+		if !stat.lastDrinkAt.IsZero() {
+			profile["last_drink_at"] = stat.lastDrinkAt.Format(time.RFC3339)
+		}
+	}
+	return nil
+}
+
+type friendDrinkStats struct {
+	count       int
+	lastDrinkAt time.Time
+}
+
+func (s *friendDrinkStats) add(drankAt time.Time) {
+	s.count++
+	if drankAt.After(s.lastDrinkAt) {
+		s.lastDrinkAt = drankAt
+	}
+}
+
+func (r *router) attachOwnedDrinkStats(req *http.Request, authToken, currentUserID string, friendIDs []string, stats map[string]*friendDrinkStats) error {
+	q := url.Values{}
+	q.Set("select", "profile_id,drink_logs!inner(owner_user_id,drank_at)")
+	q.Set("profile_id", "in.("+strings.Join(friendIDs, ",")+")")
+	q.Set("drink_logs.owner_user_id", "eq."+currentUserID)
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_log_friends", q, &rows); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		friendID, _ := row["profile_id"].(string)
+		if stat := stats[friendID]; stat != nil {
+			stat.add(embeddedDrinkLogTime(row))
+		}
+	}
+	return nil
+}
+
+func (r *router) attachTaggedDrinkStats(req *http.Request, authToken, currentUserID string, friendIDs []string, stats map[string]*friendDrinkStats) error {
+	q := url.Values{}
+	q.Set("select", "profile_id,drink_logs!inner(owner_user_id,drank_at)")
+	q.Set("profile_id", "eq."+currentUserID)
+	q.Set("drink_logs.owner_user_id", "in.("+strings.Join(friendIDs, ",")+")")
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_log_friends", q, &rows); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		log, ok := row["drink_logs"].(map[string]any)
+		if !ok {
+			continue
+		}
+		friendID, _ := log["owner_user_id"].(string)
+		if stat := stats[friendID]; stat != nil {
+			stat.add(embeddedDrinkLogTime(row))
+		}
+	}
+	return nil
+}
+
+func embeddedDrinkLogTime(row map[string]any) time.Time {
+	log, ok := row["drink_logs"].(map[string]any)
+	if !ok {
+		return time.Time{}
+	}
+	value, _ := log["drank_at"].(string)
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err == nil {
+		return parsed
+	}
+	return time.Time{}
 }
 
 func (r *router) friendshipExists(req *http.Request, authToken, userID, friendID string) (bool, error) {
@@ -733,8 +933,8 @@ func orderedPair(a, b string) (string, string) {
 }
 
 func dateOnlyParam(req *http.Request, name string) string {
-	value := strings.TrimSpace(req.URL.Query().Get(name))
-	if value == "" {
+	value, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get(name), name)
+	if errMessage != "" {
 		return time.Now().Format(time.DateOnly)
 	}
 	return value
@@ -743,14 +943,9 @@ func dateOnlyParam(req *http.Request, name string) string {
 func isValidDailyStatus(status string) bool {
 	switch status {
 	case "unselected",
-		"want_drink",
-		"busy",
 		"can_drink_today",
-		"light_drink",
-		"want_drink_hard",
 		"non_alcohol",
 		"liver_rest",
-		"waiting_invite",
 		"has_plans":
 		return true
 	default:
