@@ -6,11 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/yota/nomo/backend/internal/config"
+	"github.com/yota/nomo/backend/internal/features/drinklogs"
 	"github.com/yota/nomo/backend/internal/supabase"
 )
 
@@ -176,107 +175,15 @@ func (r *router) updateFriendFavorite(w http.ResponseWriter, req *http.Request, 
 }
 
 func (r *router) listDrinkLogs(w http.ResponseWriter, req *http.Request, authToken string) {
-	userID := req.Header.Get("X-Nomo-User-ID")
-	visibleUserIDs, err := r.visibleFeedUserIDs(req, authToken, userID)
-	if err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-
-	selectColumns := "id,owner_user_id,drank_at,place_name,place_lat,place_lng,memo,caption_y,photo_path,link_url,marker_rarity,is_official,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus),drink_log_likes(user_id),drink_log_friends(profiles(id,user_id,display_name,gender,character_key,avatar_url,is_plus))"
-	q := url.Values{}
-	q.Set("select", selectColumns)
-	q.Set("owner_user_id", "in.("+strings.Join(visibleUserIDs, ",")+")")
-	q.Set("order", "drank_at.desc")
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-
-	officialQ := url.Values{}
-	officialQ.Set("select", selectColumns)
-	officialQ.Set("is_official", "eq.true")
-	officialQ.Set("order", "drank_at.desc")
-	var officialRows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", officialQ, &officialRows); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	rows = appendUniqueDrinkLogRows(rows, officialRows...)
-
-	for _, row := range rows {
-		rawLikes, _ := row["drink_log_likes"].([]any)
-		row["like_count"] = len(rawLikes)
-		likedByMe := false
-		for _, rawLike := range rawLikes {
-			like, ok := rawLike.(map[string]any)
-			if ok && like["user_id"] == userID {
-				likedByMe = true
-				break
-			}
-		}
-		row["liked_by_me"] = likedByMe
-	}
-	sortDrinkLogRowsByDrankAtDesc(rows)
-	writeJSON(w, http.StatusOK, rows)
-}
-
-func (r *router) visibleFeedUserIDs(req *http.Request, authToken, userID string) ([]string, error) {
-	q := url.Values{}
-	q.Set("select", "user_a_id,user_b_id")
-	q.Set("or", "(user_a_id.eq."+userID+",user_b_id.eq."+userID+")")
-	var friendships []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "friendships", q, &friendships); err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{userID: true}
-	ids := []string{userID}
-	for _, friendship := range friendships {
-		for _, key := range []string{"user_a_id", "user_b_id"} {
-			id, ok := friendship[key].(string)
-			if ok && id != "" && !seen[id] {
-				seen[id] = true
-				ids = append(ids, id)
-			}
-		}
-	}
-	return ids, nil
-}
-
-func appendUniqueDrinkLogRows(rows []map[string]any, extraRows ...map[string]any) []map[string]any {
-	seen := make(map[string]bool, len(rows)+len(extraRows))
-	for _, row := range rows {
-		if id, _ := row["id"].(string); id != "" {
-			seen[id] = true
-		}
-	}
-	for _, row := range extraRows {
-		id, _ := row["id"].(string)
-		if id != "" && seen[id] {
-			continue
-		}
-		if id != "" {
-			seen[id] = true
-		}
-		rows = append(rows, row)
-	}
-	return rows
-}
-
-func sortDrinkLogRowsByDrankAtDesc(rows []map[string]any) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		return drinkLogRowTime(rows[i]).After(drinkLogRowTime(rows[j]))
+	rows, err := r.drinkLogUsecase(req).ListDrinkLogs(req.Context(), drinklogs.ListInput{
+		AuthToken: authToken,
+		UserID:    req.Header.Get("X-Nomo-User-ID"),
 	})
-}
-
-func drinkLogRowTime(row map[string]any) time.Time {
-	value, _ := row["drank_at"].(string)
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err == nil {
-		return parsed
+	if err != nil {
+		writeDrinkLogError(w, err)
+		return
 	}
-	return time.Time{}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func cleanDrinkLogMarkerRarity(value string) string {
@@ -306,150 +213,39 @@ func (r *router) createDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	friendIDs, errMessage := cleanUUIDs(input.FriendIDs, "friend id")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
-		return
-	}
-	ownerUserID := req.Header.Get("X-Nomo-User-ID")
-	validFriends, err := r.validateDrinkLogFriendIDs(req, authToken, ownerUserID, friendIDs)
+	row, err := r.drinkLogUsecase(req).CreateDrinkLog(req.Context(), drinklogs.CreateInput{
+		AuthToken:             authToken,
+		OwnerUserID:           req.Header.Get("X-Nomo-User-ID"),
+		DrankAt:               input.DrankAt,
+		DrankOn:               input.DrankOn,
+		TimezoneOffsetMinutes: input.TimezoneOffsetMinutes,
+		PlaceName:             input.PlaceName,
+		PlaceLat:              input.PlaceLat,
+		PlaceLng:              input.PlaceLng,
+		Memo:                  input.Memo,
+		CaptionY:              input.CaptionY,
+		PhotoPath:             input.PhotoPath,
+		FriendIDs:             input.FriendIDs,
+		ClientRequestedRarity: input.MarkerRarity,
+	})
 	if err != nil {
-		writeSupabaseError(w, err)
+		writeDrinkLogError(w, err)
 		return
 	}
-	if !validFriends {
-		writeError(w, http.StatusForbidden, "friend_ids must be existing friends")
-		return
-	}
-	drankAt := time.Now()
-	if input.DrankAt != nil {
-		drankAt = *input.DrankAt
-	}
-	available, errMessage, err := r.dailyDrinkLogAvailable(req, authToken, ownerUserID, input, drankAt)
-	if err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
-		return
-	}
-	if !available {
-		writeError(w, http.StatusConflict, "投稿は1日1回までです")
-		return
-	}
-	payload := map[string]any{
-		"owner_user_id": ownerUserID,
-		"drank_at":      drankAt.Format(time.RFC3339),
-		"place_name":    strings.TrimSpace(input.PlaceName),
-		"place_lat":     input.PlaceLat,
-		"place_lng":     input.PlaceLng,
-		"memo":          strings.TrimSpace(input.Memo),
-		"caption_y":     cleanDrinkLogCaptionY(input.CaptionY),
-		"photo_path":    strings.TrimSpace(input.PhotoPath),
-		"marker_rarity": cleanDrinkLogMarkerRarity(input.MarkerRarity),
-		"is_official":   false,
-	}
-	var logs []DrinkLog
-	if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_logs", nil, payload, &logs); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	if len(logs) == 0 {
-		writeError(w, http.StatusBadGateway, "drink log insert returned no rows")
-		return
-	}
-	if len(friendIDs) > 0 {
-		links := drinkLogFriendLinks(logs[0].ID, friendIDs)
-		var ignored []map[string]any
-		if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_friends", nil, links, &ignored); err != nil {
-			writeSupabaseError(w, err)
-			return
-		}
-	}
-	r.createDrinkLogTaggedNotifications(req, authToken, logs[0].ID, ownerUserID, friendIDs)
-	writeJSON(w, http.StatusCreated, logs[0])
-}
-
-func (r *router) dailyDrinkLogAvailable(req *http.Request, authToken, ownerUserID string, input CreateDrinkLogRequest, drankAt time.Time) (bool, string, error) {
-	start, end, errMessage := drinkLogDayWindow(input, drankAt)
-	if errMessage != "" {
-		return false, errMessage, nil
-	}
-	q := url.Values{}
-	q.Set("select", "id")
-	q.Set("owner_user_id", "eq."+ownerUserID)
-	q.Set("is_official", "eq.false")
-	q.Add("drank_at", "gte."+start.Format(time.RFC3339))
-	q.Add("drank_at", "lt."+end.Format(time.RFC3339))
-	q.Set("limit", "1")
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
-		return false, "", err
-	}
-	return len(rows) == 0, "", nil
-}
-
-func drinkLogDayWindow(input CreateDrinkLogRequest, drankAt time.Time) (time.Time, time.Time, string) {
-	drankOn := strings.TrimSpace(input.DrankOn)
-	if drankOn == "" {
-		utc := drankAt.UTC()
-		start := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
-		return start, start.AddDate(0, 0, 1), ""
-	}
-
-	day, err := time.Parse(time.DateOnly, drankOn)
-	if err != nil {
-		return time.Time{}, time.Time{}, "drank_on must be YYYY-MM-DD"
-	}
-	offsetMinutes := 0
-	if input.TimezoneOffsetMinutes != nil {
-		offsetMinutes = *input.TimezoneOffsetMinutes
-	}
-	if offsetMinutes < -14*60 || offsetMinutes > 14*60 {
-		return time.Time{}, time.Time{}, "timezone_offset_minutes is out of range"
-	}
-	location := time.FixedZone("client", offsetMinutes*60)
-	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location)
-	end := start.AddDate(0, 0, 1)
-	return start.UTC(), end.UTC(), ""
-}
-
-func (r *router) validateDrinkLogFriendIDs(req *http.Request, authToken, ownerUserID string, friendIDs []string) (bool, error) {
-	for _, friendID := range friendIDs {
-		if friendID == ownerUserID {
-			return false, nil
-		}
-		ok, err := r.friendshipExists(req, authToken, ownerUserID, friendID)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-	}
-	return true, nil
+	writeJSON(w, http.StatusCreated, row)
 }
 
 func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
+	row, err := r.drinkLogUsecase(req).DeleteDrinkLog(req.Context(), drinklogs.DeleteInput{
+		AuthToken:   authToken,
+		LogID:       req.PathValue("id"),
+		OwnerUserID: req.Header.Get("X-Nomo-User-ID"),
+	})
+	if err != nil {
+		writeDrinkLogError(w, err)
 		return
 	}
-	q := url.Values{}
-	q.Set("id", "eq."+logID)
-	q.Set("owner_user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
-	var rows []DrinkLog
-	if err := r.deps.Supabase.Delete(req.Context(), authToken, "drink_logs", q, &rows); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	if len(rows) == 0 {
-		writeError(w, http.StatusNotFound, "drink log not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, rows[0])
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {

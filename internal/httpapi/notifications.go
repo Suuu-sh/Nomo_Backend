@@ -102,8 +102,8 @@ func (r *router) createFriendRequestReceivedNotification(req *http.Request, auth
 		"actor_user_id":     fromUserID,
 		"friend_request_id": requestID,
 		"kind":              notificationKindFriendRequestReceived,
-		"title":             "フレンド申請が届きました",
-		"message":           actorName + "さんからフレンド申請が届きました。",
+		"title":             "フレンズ申請が届きました",
+		"message":           actorName + "さんからフレンズ申請が届きました。",
 	}, notificationKindFriendRequestReceived)
 }
 
@@ -120,8 +120,8 @@ func (r *router) createFriendRequestAcceptedNotification(req *http.Request, auth
 		"actor_user_id":     toUserID,
 		"friend_request_id": requestID,
 		"kind":              notificationKindFriendRequestAccepted,
-		"title":             "フレンド申請が承認されました",
-		"message":           actorName + "さんとフレンドになりました。",
+		"title":             "フレンズ申請が承認されました",
+		"message":           actorName + "さんとフレンズになりました。",
 	}, notificationKindFriendRequestAccepted)
 }
 
@@ -140,8 +140,8 @@ func (r *router) createDrinkInviteReceivedNotification(req *http.Request, authTo
 		"drink_invite_id":   inviteID,
 		"notification_date": dateOrNil(inviteDate),
 		"kind":              notificationKindDrinkInviteReceived,
-		"title":             "飲み誘いが届きました",
-		"message":           actorName + "さんから" + inviteDatePhrase(inviteDate) + "の飲み誘いが届きました。",
+		"title":             "お誘いが届きました",
+		"message":           actorName + "さんから" + inviteDatePhrase(inviteDate) + "のお誘いが届きました。",
 	}, notificationKindDrinkInviteReceived)
 }
 
@@ -160,8 +160,8 @@ func (r *router) createDrinkInviteAcceptedNotification(req *http.Request, authTo
 		"drink_invite_id":   inviteID,
 		"notification_date": dateOrNil(inviteDate),
 		"kind":              notificationKindDrinkInviteAccepted,
-		"title":             "飲み誘いが承認されました",
-		"message":           actorName + "さんが" + inviteDatePhrase(inviteDate) + "の飲み誘いを承認しました。",
+		"title":             "お誘いが承認されました",
+		"message":           actorName + "さんが" + inviteDatePhrase(inviteDate) + "のお誘いを承認しました。",
 	}, notificationKindDrinkInviteAccepted)
 }
 
@@ -182,8 +182,8 @@ func (r *router) createDrinkLogTaggedNotifications(req *http.Request, authToken,
 			"actor_user_id":     ownerUserID,
 			"drink_log_id":      logID,
 			"kind":              notificationKindDrinkLogTagged,
-			"title":             "飲みログに追加されました",
-			"message":           actorName + "さんがあなたを一緒に飲んだ人に追加しました。",
+			"title":             "思い出に追加されました",
+			"message":           actorName + "さんがあなたを一緒に過ごしたフレンズに追加しました。",
 		}, notificationKindDrinkLogTagged)
 	}
 }
@@ -221,8 +221,8 @@ func (r *router) createTodayReservationReminderNotifications(req *http.Request, 
 			"drink_invite_id":   inviteID,
 			"notification_date": date,
 			"kind":              notificationKindTodayReservationReminder,
-			"title":             "今日の飲み予定があります",
-			"message":           actorName + "さんとの飲み予定が今日あります。",
+			"title":             "今日の予定があります",
+			"message":           actorName + "さんとの予定が今日あります。",
 		}, notificationKindTodayReservationReminder)
 	}
 }

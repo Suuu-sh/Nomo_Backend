@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -11,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yota/nomo/backend/internal/features/drinkinvites"
-	"github.com/yota/nomo/backend/internal/supabase"
+	"github.com/yota/nomo/backend/internal/features/drinklogs"
 )
 
 type ProfileSaveRequest struct {
@@ -265,88 +264,51 @@ func (r *router) updateFriendRequest(w http.ResponseWriter, req *http.Request, a
 }
 
 func (r *router) likeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
+	state, err := r.drinkLogUsecase(req).LikeDrinkLog(req.Context(), drinklogs.LikeInput{
+		AuthToken: authToken,
+		LogID:     req.PathValue("id"),
+		UserID:    req.Header.Get("X-Nomo-User-ID"),
+	})
+	if err != nil {
+		writeDrinkLogError(w, err)
 		return
 	}
-	payload := map[string]any{"drink_log_id": logID, "user_id": userID}
-	var ignored []map[string]any
-	created := true
-	if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_likes", nil, payload, &ignored); err != nil {
-		var apiErr supabase.APIError
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
-			writeSupabaseError(w, err)
-			return
-		}
-		created = false
-	}
-	if created {
-		r.createDrinkLogLikeNotification(req, authToken, logID, userID)
-	}
-	r.writeDrinkLogLikeState(w, req, authToken, logID, userID)
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (r *router) unlikeDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
+	state, err := r.drinkLogUsecase(req).UnlikeDrinkLog(req.Context(), drinklogs.LikeInput{
+		AuthToken: authToken,
+		LogID:     req.PathValue("id"),
+		UserID:    req.Header.Get("X-Nomo-User-ID"),
+	})
+	if err != nil {
+		writeDrinkLogError(w, err)
 		return
 	}
-	q := url.Values{}
-	q.Set("drink_log_id", "eq."+logID)
-	q.Set("user_id", "eq."+userID)
-	var ignored []map[string]any
-	if err := r.deps.Supabase.Delete(req.Context(), authToken, "drink_log_likes", q, &ignored); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	r.writeDrinkLogLikeState(w, req, authToken, logID, userID)
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (r *router) reportDrinkLog(w http.ResponseWriter, req *http.Request, authToken string) {
-	logID, errMessage := cleanUUID(req.PathValue("id"), "drink log id")
-	userID := req.Header.Get("X-Nomo-User-ID")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
-		return
-	}
 	var input DrinkLogReportRequest
 	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	reason := strings.TrimSpace(input.Reason)
-	if reason == "" {
-		reason = "other"
-	}
-
-	q := url.Values{}
-	q.Set("select", "id")
-	q.Set("drink_log_id", "eq."+logID)
-	q.Set("reporter_user_id", "eq."+userID)
-	q.Set("limit", "1")
-	var existing []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_log_reports", q, &existing); err != nil {
-		writeSupabaseError(w, err)
+	result, err := r.drinkLogUsecase(req).ReportDrinkLog(req.Context(), drinklogs.ReportInput{
+		AuthToken:      authToken,
+		LogID:          req.PathValue("id"),
+		ReporterUserID: req.Header.Get("X-Nomo-User-ID"),
+		Reason:         input.Reason,
+	})
+	if err != nil {
+		writeDrinkLogError(w, err)
 		return
 	}
-	if len(existing) > 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"reported": true})
+	if result.Created {
+		writeJSON(w, http.StatusCreated, result.Body)
 		return
 	}
-
-	payload := map[string]any{"drink_log_id": logID, "reporter_user_id": userID, "reason": reason}
-	var rows []map[string]any
-	if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_log_reports", nil, payload, &rows); err != nil {
-		var apiErr supabase.APIError
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
-			writeSupabaseError(w, err)
-			return
-		}
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"reported": true})
+	writeJSON(w, http.StatusOK, result.Body)
 }
 
 func (r *router) listNotifications(w http.ResponseWriter, req *http.Request, authToken string) {
@@ -404,8 +366,8 @@ func (r *router) createDrinkLogLikeNotification(req *http.Request, authToken, lo
 		"actor_user_id":     actorUserID,
 		"drink_log_id":      logID,
 		"kind":              notificationKindDrinkLogLike,
-		"title":             "いいねされました",
-		"message":           actorName + "さんがあなたの飲みログにいいねしました。",
+		"title":             "思い出にいいねされました",
+		"message":           actorName + "さんがあなたの思い出にいいねしました。",
 	}
 	r.tryInsertNotification(req, notification, notificationKindDrinkLogLike)
 }
@@ -553,6 +515,53 @@ func writeDrinkInviteError(w http.ResponseWriter, err error) {
 			writeError(w, http.StatusConflict, err.Error())
 		case drinkinvites.ErrorKindNotFound:
 			writeError(w, http.StatusNotFound, err.Error())
+		default:
+			writeError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	writeSupabaseError(w, err)
+}
+
+func (r *router) drinkLogUsecase(req *http.Request) *drinklogs.Usecase {
+	return drinklogs.NewUsecase(drinklogs.Dependencies{
+		Repository: drinklogs.NewSupabaseRepository(r.deps.Supabase),
+		Notifier:   drinkLogNotifier{router: r, req: req},
+	})
+}
+
+type drinkLogNotifier struct {
+	router *router
+	req    *http.Request
+}
+
+func (n drinkLogNotifier) DrinkLogTagged(_ context.Context, authToken, logID, ownerUserID string, friendIDs []string) {
+	if n.router == nil || n.req == nil {
+		return
+	}
+	n.router.createDrinkLogTaggedNotifications(n.req, authToken, logID, ownerUserID, friendIDs)
+}
+
+func (n drinkLogNotifier) DrinkLogLiked(_ context.Context, authToken, logID, actorUserID string) {
+	if n.router == nil || n.req == nil {
+		return
+	}
+	n.router.createDrinkLogLikeNotification(n.req, authToken, logID, actorUserID)
+}
+
+func writeDrinkLogError(w http.ResponseWriter, err error) {
+	if kind, ok := drinklogs.ErrorKindOf(err); ok {
+		switch kind {
+		case drinklogs.ErrorKindInvalidInput:
+			writeError(w, http.StatusBadRequest, err.Error())
+		case drinklogs.ErrorKindForbidden:
+			writeError(w, http.StatusForbidden, err.Error())
+		case drinklogs.ErrorKindConflict:
+			writeError(w, http.StatusConflict, err.Error())
+		case drinklogs.ErrorKindNotFound:
+			writeError(w, http.StatusNotFound, err.Error())
+		case drinklogs.ErrorKindUpstream:
+			writeError(w, http.StatusBadGateway, "upstream service error")
 		default:
 			writeError(w, http.StatusBadRequest, err.Error())
 		}
@@ -862,28 +871,6 @@ func (r *router) upsertFriendshipPair(req *http.Request, authToken, userA, userB
 		"user_a_id": first,
 		"user_b_id": second,
 	}, &rows)
-}
-
-func (r *router) writeDrinkLogLikeState(w http.ResponseWriter, req *http.Request, authToken, logID, userID string) {
-	q := url.Values{}
-	q.Set("select", "user_id")
-	q.Set("drink_log_id", "eq."+logID)
-	var likes []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_log_likes", q, &likes); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	likedByMe := false
-	for _, like := range likes {
-		if like["user_id"] == userID {
-			likedByMe = true
-			break
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"like_count":  len(likes),
-		"liked_by_me": likedByMe,
-	})
 }
 
 func orderedPair(a, b string) (string, string) {
