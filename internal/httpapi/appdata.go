@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/yota/nomo/backend/internal/features/drinkinvites"
 	"github.com/yota/nomo/backend/internal/supabase"
 )
 
@@ -438,16 +439,12 @@ func (r *router) displayNameForNotification(req *http.Request, authToken, userID
 }
 
 func (r *router) listTodayReservations(w http.ResponseWriter, req *http.Request, authToken string) {
-	userID := req.Header.Get("X-Nomo-User-ID")
-	date := dateOnlyParam(req, "date")
-	q := url.Values{}
-	q.Set("select", drinkInviteSelect)
-	q.Set("invite_date", "eq."+date)
-	q.Set("status", "eq.accepted")
-	q.Set("or", "(from_user_id.eq."+userID+",to_user_id.eq."+userID+")")
-	q.Set("order", "responded_at.desc")
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_invites", q, &rows); err != nil {
+	rows, err := r.drinkInviteUsecase(req).ListTodayReservations(req.Context(), drinkinvites.ListInput{
+		AuthToken:  authToken,
+		UserID:     req.Header.Get("X-Nomo-User-ID"),
+		InviteDate: dateOnlyParam(req, "date"),
+	})
+	if err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
@@ -455,16 +452,12 @@ func (r *router) listTodayReservations(w http.ResponseWriter, req *http.Request,
 }
 
 func (r *router) listIncomingPendingInvites(w http.ResponseWriter, req *http.Request, authToken string) {
-	userID := req.Header.Get("X-Nomo-User-ID")
-	date := dateOnlyParam(req, "date")
-	q := url.Values{}
-	q.Set("select", drinkInviteSelect)
-	q.Set("invite_date", "eq."+date)
-	q.Set("to_user_id", "eq."+userID)
-	q.Set("status", "eq.pending")
-	q.Set("order", "created_at.desc")
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_invites", q, &rows); err != nil {
+	rows, err := r.drinkInviteUsecase(req).ListIncomingPending(req.Context(), drinkinvites.ListInput{
+		AuthToken:  authToken,
+		UserID:     req.Header.Get("X-Nomo-User-ID"),
+		InviteDate: dateOnlyParam(req, "date"),
+	})
+	if err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
@@ -472,16 +465,12 @@ func (r *router) listIncomingPendingInvites(w http.ResponseWriter, req *http.Req
 }
 
 func (r *router) listOutgoingActiveInvites(w http.ResponseWriter, req *http.Request, authToken string) {
-	userID := req.Header.Get("X-Nomo-User-ID")
-	date := dateOnlyParam(req, "date")
-	q := url.Values{}
-	q.Set("select", drinkInviteSelect)
-	q.Set("invite_date", "eq."+date)
-	q.Set("from_user_id", "eq."+userID)
-	q.Set("status", "in.(pending,accepted)")
-	q.Set("order", "created_at.desc")
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_invites", q, &rows); err != nil {
+	rows, err := r.drinkInviteUsecase(req).ListOutgoingActive(req.Context(), drinkinvites.ListInput{
+		AuthToken:  authToken,
+		UserID:     req.Header.Get("X-Nomo-User-ID"),
+		InviteDate: dateOnlyParam(req, "date"),
+	})
+	if err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
@@ -493,129 +482,84 @@ func (r *router) createDrinkInvite(w http.ResponseWriter, req *http.Request, aut
 	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	fromUserID := req.Header.Get("X-Nomo-User-ID")
-	toUserID, errMessage := cleanUUID(input.ToUserID, "to_user_id")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
+	row, err := r.drinkInviteUsecase(req).CreateDrinkInvite(req.Context(), drinkinvites.CreateInput{
+		AuthToken:  authToken,
+		FromUserID: req.Header.Get("X-Nomo-User-ID"),
+		ToUserID:   input.ToUserID,
+		InviteDate: input.InviteDate,
+	})
+	if err != nil {
+		writeDrinkInviteError(w, err)
 		return
 	}
-	if toUserID == fromUserID {
-		writeError(w, http.StatusBadRequest, "cannot invite yourself")
-		return
-	}
-	inviteDate, errMessage := cleanDateOnlyOrToday(input.InviteDate, "invite_date")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
-		return
-	}
-	if blockedMessage, err := r.blockedInviteStatusMessage(req.Context(), authToken, toUserID, inviteDate); err != nil {
-		writeSupabaseError(w, err)
-		return
-	} else if blockedMessage != "" {
-		writeError(w, http.StatusConflict, blockedMessage)
-		return
-	}
-
-	q := url.Values{}
-	q.Set("select", "id,status")
-	q.Set("invite_date", "eq."+inviteDate)
-	q.Set("or", "(and(from_user_id.eq."+fromUserID+",to_user_id.eq."+toUserID+"),and(from_user_id.eq."+toUserID+",to_user_id.eq."+fromUserID+"))")
-	q.Set("status", "in.(pending,accepted)")
-	q.Set("limit", "1")
-	var existing []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "drink_invites", q, &existing); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	if len(existing) > 0 {
-		if existing[0]["status"] == "accepted" {
-			writeError(w, http.StatusConflict, "今日はもう予約済みです。")
-		} else {
-			writeError(w, http.StatusConflict, "すでに招待中です。")
-		}
-		return
-	}
-
-	payload := map[string]any{
-		"from_user_id": fromUserID,
-		"to_user_id":   toUserID,
-		"invite_date":  inviteDate,
-		"status":       "pending",
-	}
-	var rows []map[string]any
-	if err := r.deps.Supabase.Post(req.Context(), authToken, "drink_invites", nil, payload, &rows); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	row := firstMap(rows, payload)
-	r.createDrinkInviteReceivedNotification(req, authToken, row)
 	writeJSON(w, http.StatusCreated, row)
 }
 
-func (r *router) blockedInviteStatusMessage(ctx context.Context, authToken, userID, inviteDate string) (string, error) {
-	q := url.Values{}
-	q.Set("select", "status")
-	q.Set("user_id", "eq."+userID)
-	q.Set("status_date", "eq."+inviteDate)
-	q.Set("limit", "1")
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(ctx, authToken, "daily_statuses", q, &rows); err != nil {
-		return "", err
-	}
-	if len(rows) == 0 {
-		return "", nil
-	}
-	status, _ := rows[0]["status"].(string)
-	switch strings.TrimSpace(status) {
-	case "liver_rest":
-		return "相手が休肝日のため今日は誘えません。", nil
-	case "has_plans":
-		return "相手に予定があるため今日は誘えません。", nil
-	default:
-		return "", nil
-	}
-}
-
 func (r *router) updateDrinkInvite(w http.ResponseWriter, req *http.Request, authToken string) {
-	inviteID, errMessage := cleanUUID(req.PathValue("id"), "drink invite id")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
+	inviteID := req.PathValue("id")
+	if _, err := drinkinvites.CleanUUID(inviteID, "drink invite id"); err != nil {
+		writeDrinkInviteError(w, err)
 		return
 	}
 	var input DrinkInviteUpdateRequest
 	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	status := strings.TrimSpace(input.Status)
-	if status != "accepted" && status != "rejected" {
-		writeError(w, http.StatusBadRequest, "status must be accepted or rejected")
+	row, err := r.drinkInviteUsecase(req).UpdateDrinkInvite(req.Context(), drinkinvites.UpdateInput{
+		AuthToken:       authToken,
+		InviteID:        inviteID,
+		RecipientUserID: req.Header.Get("X-Nomo-User-ID"),
+		Status:          input.Status,
+	})
+	if err != nil {
+		writeDrinkInviteError(w, err)
 		return
 	}
-
-	q := url.Values{}
-	q.Set("id", "eq."+inviteID)
-	q.Set("to_user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
-	q.Set("status", "eq.pending")
-	payload := map[string]any{
-		"status":       status,
-		"responded_at": time.Now().UTC().Format(time.RFC3339),
-	}
-	var rows []map[string]any
-	if err := r.deps.Supabase.Patch(req.Context(), authToken, "drink_invites", q, payload, &rows); err != nil {
-		writeSupabaseError(w, err)
-		return
-	}
-	if len(rows) == 0 {
-		writeError(w, http.StatusNotFound, "drink invite not found")
-		return
-	}
-	if status == "accepted" {
-		r.createDrinkInviteAcceptedNotification(req, authToken, rows[0])
-	}
-	writeJSON(w, http.StatusOK, rows[0])
+	writeJSON(w, http.StatusOK, row)
 }
 
-const drinkInviteSelect = "id,from_user_id,to_user_id,invite_date,status,from_user:profiles!drink_invites_from_user_id_fkey(id,display_name,user_id,gender,avatar_url),to_user:profiles!drink_invites_to_user_id_fkey(id,display_name,user_id,gender,avatar_url)"
+func (r *router) drinkInviteUsecase(req *http.Request) *drinkinvites.Usecase {
+	return drinkinvites.NewUsecase(drinkinvites.Dependencies{
+		Repository: drinkinvites.NewSupabaseRepository(r.deps.Supabase),
+		Notifier:   drinkInviteNotifier{router: r, req: req},
+	})
+}
+
+type drinkInviteNotifier struct {
+	router *router
+	req    *http.Request
+}
+
+func (n drinkInviteNotifier) DrinkInviteReceived(_ context.Context, authToken string, inviteRow map[string]any) {
+	if n.router == nil || n.req == nil {
+		return
+	}
+	n.router.createDrinkInviteReceivedNotification(n.req, authToken, inviteRow)
+}
+
+func (n drinkInviteNotifier) DrinkInviteAccepted(_ context.Context, authToken string, inviteRow map[string]any) {
+	if n.router == nil || n.req == nil {
+		return
+	}
+	n.router.createDrinkInviteAcceptedNotification(n.req, authToken, inviteRow)
+}
+
+func writeDrinkInviteError(w http.ResponseWriter, err error) {
+	if kind, ok := drinkinvites.ErrorKindOf(err); ok {
+		switch kind {
+		case drinkinvites.ErrorKindInvalidInput:
+			writeError(w, http.StatusBadRequest, err.Error())
+		case drinkinvites.ErrorKindConflict:
+			writeError(w, http.StatusConflict, err.Error())
+		case drinkinvites.ErrorKindNotFound:
+			writeError(w, http.StatusNotFound, err.Error())
+		default:
+			writeError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	writeSupabaseError(w, err)
+}
 
 func (input *ProfileSaveRequest) normalize() {
 	input.UserID = strings.TrimSpace(input.UserID)
