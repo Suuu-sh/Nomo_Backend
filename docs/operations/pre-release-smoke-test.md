@@ -67,7 +67,7 @@ Run this before TestFlight / production release. For Nomo dev checks, use iOS Si
 
 - Device: iOS Simulator `iPhone 17`.
 - Backend/Supabase target: dev environment.
-- Result: build/run succeeded and an existing Admin session loaded. Feed/profile/settings surfaces rendered.
+- Result: build/run succeeded and an existing Admin session loaded. Feed/profile/settings surfaces rendered. Admin screen and 通報 tab loaded; status/note/post-delete controls were visible without executing destructive actions.
 - GitHub Actions: latest `Supabase Dev Migrate` run on `development` succeeded: https://github.com/Suuu-sh/Nomo_Mobile/actions/runs/26548996618
 - Not fully executed in this pass: mutating manual flows (`drink log create`, `photo upload`, `invite/accept`, `block/mute/hide/report`) and push notification delivery. Run those with prepared dev accounts before production/TestFlight release.
 
