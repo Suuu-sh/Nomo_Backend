@@ -27,7 +27,7 @@ Last updated: 2026-05-28
 
 ## Dev operation
 
-1. Apply Supabase baseline migration to `dev-nomo`.
+1. Apply Supabase baseline migration to `dev-ohey`.
 2. Run one of the dev seed SQL files after setting `app.seed_password`.
 3. Confirm sign-in through `scripts/ohey_supabase_runtime_check.py`.
 4. Confirm Backend through `scripts/ohey_backend_smoke.py`.
