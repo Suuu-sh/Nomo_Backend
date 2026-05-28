@@ -4,6 +4,40 @@ Last updated: 2026-05-28
 
 Run this before TestFlight / production release. For Nomo dev checks, use iOS Simulator connected to dev Render/Supabase unless explicitly testing production/TestFlight.
 
+
+## Scripted checks
+
+Run static migration contract before relying on an environment:
+
+```bash
+cd /Users/yota/Projects/Products/Nomo/Mobile
+python3 scripts/verify_supabase_rls_contract.py
+```
+
+Run Supabase runtime RLS / GRANT check after migration is applied:
+
+```bash
+SUPABASE_URL=... \
+SUPABASE_PUBLISHABLE_KEY=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+NOMO_SMOKE_EMAIL=... \
+NOMO_SMOKE_PASSWORD=... \
+python3 scripts/nomo_supabase_runtime_check.py
+```
+
+Run Backend API smoke against dev/prod Render:
+
+```bash
+NOMO_BACKEND_URL=https://dev-nomo-backend.onrender.com \
+SUPABASE_URL=... \
+SUPABASE_PUBLISHABLE_KEY=... \
+NOMO_SMOKE_EMAIL=... \
+NOMO_SMOKE_PASSWORD=... \
+python3 scripts/nomo_backend_smoke.py --mutating
+```
+
+Production で `--mutating` を使う場合は、専用 smoke account を使う。
+
 ## Account / profile
 
 - [ ] Login succeeds with a normal user.
