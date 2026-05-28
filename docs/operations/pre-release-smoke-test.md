@@ -66,9 +66,9 @@ Run this before TestFlight / production release. For Nomo dev checks, use iOS Si
 ### 2026-05-28 dev Backend/API smoke after memories/invites rename
 
 - Backend/Supabase target: `https://dev-nomo-backend.onrender.com` + dev-nomo Supabase.
-- Render deploy: `dev-nomo-backend` live on Backend commit `2fa7ff2` (`Refactor app domain to memories and invites`).
+- Render deploy: `dev-nomo-backend` live on Backend commit `e867637` (`Remove remaining drink-specific feed naming`).
 - GitHub Actions: latest `Supabase Dev Migrate` run on `development` succeeded: https://github.com/Suuu-sh/Nomo_Mobile/actions/runs/26572788398
-- Executed with prepared dev users: login, profile bootstrap, daily status/month endpoint, friendship, signed photo upload URL, actual signed Storage upload, memory create, memory list, home feed with uploaded photo, like, report, hide/unhide, invite create/list/accept/reservations, mute/unmute, block/unblock, user report, notifications list.
+- Executed with prepared dev users: login, profile bootstrap, daily status/month endpoint, friendship, signed photo upload URL, actual signed Storage upload, memory create, memory list, home feed with uploaded photo (`feed_prop = memory`), like, report, hide/unhide, invite create/list/accept/reservations, mute/unmute, block/unblock, user report, notifications list.
 - Verified old REST tables return missing: `drink_logs`, `drink_invites`, `drink_log_reports`, `feed_hidden_drink_logs`.
 - Not covered by API smoke: real APNs/FCM device delivery and manual visual QA on the latest Simulator build.
 
