@@ -36,3 +36,18 @@ func (u *Usecase) CreateUploadURL(ctx context.Context, input UploadRequest) (Upl
 	}
 	return u.storage.CreateSignedUploadURL(ctx, target)
 }
+
+func (u *Usecase) CreateDisplayURL(ctx context.Context, input DisplayURLRequest) (DisplayURL, error) {
+	if _, err := CleanUUID(input.UserID, "user id"); err != nil {
+		return DisplayURL{}, err
+	}
+	path, err := CleanMemoryPhotoPath(input.Path)
+	if err != nil {
+		return DisplayURL{}, err
+	}
+	signedURL, err := u.storage.CreateSignedDisplayURL(ctx, PhotoBucket, path, DisplayURLTTLSeconds)
+	if err != nil {
+		return DisplayURL{}, err
+	}
+	return DisplayURL{Bucket: PhotoBucket, Path: path, SignedURL: signedURL, ExpiresIn: DisplayURLTTLSeconds}, nil
+}

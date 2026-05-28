@@ -18,7 +18,7 @@ import (
 const (
 	testUserID    = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	otherUserID   = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-	testLogID     = "11111111-2222-3333-4444-555555555555"
+	testMemoryID  = "11111111-2222-3333-4444-555555555555"
 	testRequestID = "22222222-3333-4444-5555-666666666666"
 )
 
@@ -147,7 +147,7 @@ func TestHandlerRejectsInvalidUUIDAndDate(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{name: "uuid", method: http.MethodDelete, path: "/v1/drink-logs/not-a-uuid"},
+		{name: "uuid", method: http.MethodDelete, path: "/v1/memories/not-a-uuid"},
 		{name: "date", method: http.MethodGet, path: "/v1/daily-status?date=2026/05/23"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -210,7 +210,7 @@ func TestAdminListUsersUsesRequestedStatusDate(t *testing.T) {
 			}
 			writeFakeJSON(w, http.StatusOK, []map[string]any{{
 				"user_id": otherUserID,
-				"status":  "non_alcohol",
+				"status":  "maybe_available",
 			}})
 		default:
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
@@ -227,7 +227,7 @@ func TestAdminListUsersUsesRequestedStatusDate(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got := rows[0]["status"]; got != "non_alcohol" {
+	if got := rows[0]["status"]; got != "maybe_available" {
 		t.Fatalf("status = %#v", got)
 	}
 }
@@ -238,7 +238,7 @@ func TestAdminUpdateUserWritesRequestedStatusDate(t *testing.T) {
 
 	testRouter(fake, "user@example.com").ServeHTTP(
 		w,
-		authedRequest(http.MethodPatch, "/v1/admin/users/"+otherUserID, `{"status":"non_alcohol","status_date":"2026-05-26"}`),
+		authedRequest(http.MethodPatch, "/v1/admin/users/"+otherUserID, `{"status":"maybe_available","status_date":"2026-05-26"}`),
 	)
 
 	if w.Code != http.StatusOK {
@@ -251,14 +251,14 @@ func TestAdminUpdateUserWritesRequestedStatusDate(t *testing.T) {
 	if !strings.Contains(request.Body, `"status_date":"2026-05-26"`) {
 		t.Fatalf("daily status body missing requested date: %s", request.Body)
 	}
-	if !strings.Contains(request.Body, `"status":"non_alcohol"`) {
+	if !strings.Contains(request.Body, `"status":"maybe_available"`) {
 		t.Fatalf("daily status body missing status: %s", request.Body)
 	}
 }
 
-func TestDeleteDrinkLogIsScopedToAuthenticatedOwner(t *testing.T) {
+func TestDeleteMemoryIsScopedToAuthenticatedOwner(t *testing.T) {
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/rest/v1/drink_logs" && req.Method == http.MethodDelete {
+		if req.URL.Path == "/rest/v1/memories" && req.Method == http.MethodDelete {
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
 			return
 		}
@@ -266,14 +266,14 @@ func TestDeleteDrinkLogIsScopedToAuthenticatedOwner(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodDelete, "/v1/drink-logs/"+testLogID, ""))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodDelete, "/v1/memories/"+testMemoryID, ""))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
-	request, ok := fake.lastRequest("/rest/v1/drink_logs")
+	request, ok := fake.lastRequest("/rest/v1/memories")
 	if !ok {
-		t.Fatal("drink_logs request was not sent")
+		t.Fatal("memories request was not sent")
 	}
 	if got := request.Query.Get("owner_user_id"); got != "eq."+testUserID {
 		t.Fatalf("owner_user_id filter = %q", got)
@@ -316,27 +316,153 @@ func TestUpdateFriendRequestIsScopedToAuthenticatedParticipant(t *testing.T) {
 	}
 }
 
-func TestCreateDrinkLogValidatesFriendIDsAndCreatesLinks(t *testing.T) {
+func TestDeleteFriendshipIsScopedToAuthenticatedUserPair(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/rest/v1/friendships" && req.Method == http.MethodDelete {
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{"id": "friendship"}})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodDelete, "/v1/friends/"+otherUserID, ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/friendships")
+	if !ok || request.Method != http.MethodDelete {
+		t.Fatalf("friendship delete request = %#v", request)
+	}
+	filter := request.Query.Get("or")
+	if !strings.Contains(filter, testUserID) || !strings.Contains(filter, otherUserID) {
+		t.Fatalf("friendship delete filter = %q", filter)
+	}
+}
+
+func TestGetFriendRequestStatusReturnsRequestID(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/rest/v1/friendships":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{})
+		case "/rest/v1/friend_requests":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"id":           testRequestID,
+				"from_user_id": testUserID,
+				"to_user_id":   otherUserID,
+			}})
+		default:
+			writeFakeJSON(w, http.StatusOK, []map[string]any{})
+		}
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodGet, "/v1/friend-requests/status?friend_id="+otherUserID, ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"request_id":"`+testRequestID+`"`) {
+		t.Fatalf("body missing request_id: %s", w.Body.String())
+	}
+}
+
+func TestListFriendRequestsScopesDirection(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/rest/v1/friend_requests" && req.Method == http.MethodGet {
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"id":           testRequestID,
+				"from_user_id": otherUserID,
+				"to_user_id":   testUserID,
+				"status":       "pending",
+				"from_user": map[string]any{
+					"id":           otherUserID,
+					"user_id":      "friend_1",
+					"display_name": "Friend",
+				},
+			}})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodGet, "/v1/friend-requests?direction=incoming", ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/friend_requests")
+	if !ok {
+		t.Fatal("friend_requests request was not sent")
+	}
+	if got := request.Query.Get("status"); got != "eq.pending" {
+		t.Fatalf("status filter = %q", got)
+	}
+	if got := request.Query.Get("to_user_id"); got != "eq."+testUserID {
+		t.Fatalf("to_user_id filter = %q", got)
+	}
+	if !strings.Contains(request.Query.Get("select"), "from_user:profiles") {
+		t.Fatalf("select missing embedded profile: %q", request.Query.Get("select"))
+	}
+}
+
+func TestListBlockedUsersReturnsTargetProfiles(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/rest/v1/user_blocks":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"blocked_user_id": otherUserID,
+				"created_at":      "2026-05-28T00:00:00Z",
+			}})
+		case "/rest/v1/profiles":
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{
+				"id":           otherUserID,
+				"user_id":      "friend_1",
+				"display_name": "Friend",
+			}})
+		default:
+			writeFakeJSON(w, http.StatusOK, []map[string]any{})
+		}
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodGet, "/v1/user-blocks", ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/user_blocks")
+	if !ok || request.Query.Get("blocker_user_id") != "eq."+testUserID {
+		t.Fatalf("user_blocks request = %#v", request)
+	}
+	if !strings.Contains(w.Body.String(), `"target_user_id":"`+otherUserID+`"`) {
+		t.Fatalf("body missing target_user_id: %s", w.Body.String())
+	}
+}
+
+func TestCreateMemoryValidatesFriendIDsAndCreatesLinks(t *testing.T) {
 	friendID := otherUserID
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/rest/v1/friendships":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{{"id": "friendship"}})
-		case "/rest/v1/drink_logs":
+		case "/rest/v1/memories":
 			if req.Method == http.MethodGet {
 				writeFakeJSON(w, http.StatusOK, []map[string]any{})
 				return
 			}
 			writeFakeJSON(w, http.StatusCreated, []map[string]any{{
-				"id":            testLogID,
-				"drank_at":      "2026-05-23T10:00:00Z",
+				"id":            testMemoryID,
+				"happened_at":   "2026-05-23T10:00:00Z",
 				"owner_user_id": testUserID,
-				"place_name":    "Test Bar",
+				"place_name":    "Test Place",
 				"memo":          "memo",
 				"photo_path":    "",
 				"is_official":   false,
 			}})
-		case "/rest/v1/drink_log_friends":
+		case "/rest/v1/memory_tagged_users":
 			writeFakeJSON(w, http.StatusCreated, []map[string]any{})
 		case "/rest/v1/profiles":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{{"display_name": "Actor", "user_id": "actor"}})
@@ -346,30 +472,30 @@ func TestCreateDrinkLogValidatesFriendIDsAndCreatesLinks(t *testing.T) {
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
 		}
 	})
-	body := `{"drank_at":"2026-05-23T10:00:00Z","place_name":" Test Bar ","memo":"memo","friend_ids":["` + friendID + `","` + friendID + `"]}`
+	body := `{"happened_at":"2026-05-23T10:00:00Z","place_name":" Test Place ","memo":"memo","friend_ids":["` + friendID + `","` + friendID + `"]}`
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/drink-logs", body))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/memories", body))
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
-	request, ok := fake.lastRequest("/rest/v1/drink_log_friends")
+	request, ok := fake.lastRequest("/rest/v1/memory_tagged_users")
 	if !ok {
-		t.Fatal("drink_log_friends request was not sent")
+		t.Fatal("memory_tagged_users request was not sent")
 	}
 	if strings.Count(request.Body, friendID) != 1 {
 		t.Fatalf("friend links were not deduplicated: %s", request.Body)
 	}
 }
 
-func TestCreateDrinkLogRejectsExistingLogOnSameLocalDay(t *testing.T) {
+func TestCreateMemoryRejectsExistingLogOnSameLocalDay(t *testing.T) {
 	insertSent := false
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/rest/v1/friendships":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{{"id": "friendship"}})
-		case "/rest/v1/drink_logs":
+		case "/rest/v1/memories":
 			if req.Method == http.MethodGet {
 				query := req.URL.Query()
 				if got := query.Get("owner_user_id"); got != "eq."+testUserID {
@@ -378,13 +504,13 @@ func TestCreateDrinkLogRejectsExistingLogOnSameLocalDay(t *testing.T) {
 				if got := query.Get("is_official"); got != "eq.false" {
 					t.Fatalf("is_official filter = %q", got)
 				}
-				filters := query["drank_at"]
+				filters := query["happened_at"]
 				if len(filters) != 2 ||
 					filters[0] != "gte.2026-05-23T15:00:00Z" ||
 					filters[1] != "lt.2026-05-24T15:00:00Z" {
-					t.Fatalf("drank_at filters = %#v", filters)
+					t.Fatalf("happened_at filters = %#v", filters)
 				}
-				writeFakeJSON(w, http.StatusOK, []map[string]any{{"id": testLogID}})
+				writeFakeJSON(w, http.StatusOK, []map[string]any{{"id": testMemoryID}})
 				return
 			}
 			insertSent = true
@@ -393,34 +519,34 @@ func TestCreateDrinkLogRejectsExistingLogOnSameLocalDay(t *testing.T) {
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
 		}
 	})
-	body := `{"drank_at":"2026-05-24T12:30:00Z","drank_on":"2026-05-24","timezone_offset_minutes":540,"friend_ids":["` + otherUserID + `"]}`
+	body := `{"happened_at":"2026-05-24T12:30:00Z","happened_on":"2026-05-24","timezone_offset_minutes":540,"friend_ids":["` + otherUserID + `"]}`
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/drink-logs", body))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/memories", body))
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
 	if insertSent {
-		t.Fatal("drink log insert was sent despite same-day existing log")
+		t.Fatal("memory insert was sent despite same-day existing memory")
 	}
-	if !strings.Contains(w.Body.String(), "1日1回") {
+	if !strings.Contains(w.Body.String(), "1日1つ") {
 		t.Fatalf("body does not explain daily limit: %s", w.Body.String())
 	}
 }
 
-func TestCreateDrinkLogRejectsInvalidFriendID(t *testing.T) {
+func TestCreateMemoryRejectsInvalidFriendID(t *testing.T) {
 	fake := newFakeSupabase(t, nil)
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/drink-logs", `{"friend_ids":["bad"]}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/memories", `{"friend_ids":["bad"]}`))
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
 }
 
-func TestCreateDrinkLogRejectsNonFriendTag(t *testing.T) {
+func TestCreateMemoryRejectsNonFriendTag(t *testing.T) {
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/rest/v1/friendships" {
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
@@ -430,13 +556,13 @@ func TestCreateDrinkLogRejectsNonFriendTag(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/drink-logs", `{"friend_ids":["`+otherUserID+`"]}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/memories", `{"friend_ids":["`+otherUserID+`"]}`))
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
-	if _, ok := fake.lastRequest("/rest/v1/drink_logs"); ok {
-		t.Fatal("drink log insert was sent for a non-friend tag")
+	if _, ok := fake.lastRequest("/rest/v1/memories"); ok {
+		t.Fatal("memory insert was sent for a non-friend tag")
 	}
 }
 
@@ -484,23 +610,23 @@ func TestCreateFriendRequestRejectsInvalidRecipient(t *testing.T) {
 	}
 }
 
-func TestCreateDrinkInviteValidatesDateAndCreatesInvite(t *testing.T) {
+func TestCreateInviteValidatesDateAndCreatesInvite(t *testing.T) {
 	inviteID := "33333333-4444-5555-6666-777777777777"
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/rest/v1/daily_statuses":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
-		case "/rest/v1/drink_invites":
+		case "/rest/v1/invites":
 			if req.Method == http.MethodGet {
 				writeFakeJSON(w, http.StatusOK, []map[string]any{})
 				return
 			}
 			writeFakeJSON(w, http.StatusCreated, []map[string]any{{
-				"id":           inviteID,
-				"from_user_id": testUserID,
-				"to_user_id":   otherUserID,
-				"invite_date":  "2026-05-23",
-				"status":       "pending",
+				"id":              inviteID,
+				"inviter_user_id": testUserID,
+				"invitee_user_id": otherUserID,
+				"scheduled_date":  "2026-05-23",
+				"status":          "pending",
 			}})
 		case "/rest/v1/profiles":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{{"display_name": "Actor", "user_id": "actor"}})
@@ -512,22 +638,22 @@ func TestCreateDrinkInviteValidatesDateAndCreatesInvite(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/drink-invites", `{"to_user_id":"`+otherUserID+`","invite_date":"2026-05-23"}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/invites", `{"invitee_user_id":"`+otherUserID+`","scheduled_date":"2026-05-23"}`))
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
-	request, ok := fake.lastRequest("/rest/v1/drink_invites")
+	request, ok := fake.lastRequest("/rest/v1/invites")
 	if !ok || request.Method != http.MethodPost || !strings.Contains(request.Body, "2026-05-23") {
 		t.Fatalf("invite create request = %#v", request)
 	}
 }
 
-func TestCreateDrinkInviteRejectsInvalidDate(t *testing.T) {
+func TestCreateInviteRejectsInvalidDate(t *testing.T) {
 	fake := newFakeSupabase(t, nil)
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/drink-invites", `{"to_user_id":"`+otherUserID+`","invite_date":"2026/05/23"}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/invites", `{"invitee_user_id":"`+otherUserID+`","scheduled_date":"2026/05/23"}`))
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
@@ -570,11 +696,11 @@ func TestAdminCreateNotificationRejectsInvalidRecipient(t *testing.T) {
 	}
 }
 
-func TestCreateMediaUploadURLCreatesUserScopedDrinkLogPhotoPath(t *testing.T) {
+func TestCreateMediaUploadURLCreatesUserScopedMemoryPhotoPath(t *testing.T) {
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
-		if strings.HasPrefix(req.URL.Path, "/storage/v1/object/upload/sign/nomo-photos/users/"+testUserID+"/drink_logs/") {
+		if strings.HasPrefix(req.URL.Path, "/storage/v1/object/upload/sign/nomo-photos/users/"+testUserID+"/memories/") {
 			writeFakeJSON(w, http.StatusOK, map[string]any{
-				"url":   "/object/upload/sign/nomo-photos/users/" + testUserID + "/drink_logs/photo.jpg?token=upload-token",
+				"url":   "/object/upload/sign/nomo-photos/users/" + testUserID + "/memories/photo.jpg?token=upload-token",
 				"token": "upload-token",
 			})
 			return
@@ -583,7 +709,7 @@ func TestCreateMediaUploadURLCreatesUserScopedDrinkLogPhotoPath(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/media/upload-url", `{"kind":"drink_log_photo","file_extension":".jpg","content_type":"image/jpeg"}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/media/upload-url", `{"kind":"memory_photo","file_extension":".jpg","content_type":"image/jpeg"}`))
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
@@ -596,7 +722,7 @@ func TestCreateMediaUploadURLCreatesUserScopedDrinkLogPhotoPath(t *testing.T) {
 		t.Fatalf("response = %#v", body)
 	}
 	path, _ := body["path"].(string)
-	if !strings.HasPrefix(path, "users/"+testUserID+"/drink_logs/") || !strings.HasSuffix(path, ".jpg") {
+	if !strings.HasPrefix(path, "users/"+testUserID+"/memories/") || !strings.HasSuffix(path, ".jpg") {
 		t.Fatalf("path = %q", path)
 	}
 	request, ok := fake.lastRequest("/storage/v1/object/upload/sign/nomo-photos/" + path)
@@ -668,10 +794,10 @@ func TestSupabaseClientErrorsAreMasked(t *testing.T) {
 	}
 }
 
-func TestUpdateDrinkInviteIsScopedToAuthenticatedRecipientAndPending(t *testing.T) {
+func TestUpdateInviteIsScopedToAuthenticatedRecipientAndPending(t *testing.T) {
 	inviteID := "33333333-4444-5555-6666-777777777777"
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/rest/v1/drink_invites" && req.Method == http.MethodPatch {
+		if req.URL.Path == "/rest/v1/invites" && req.Method == http.MethodPatch {
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
 			return
 		}
@@ -679,17 +805,17 @@ func TestUpdateDrinkInviteIsScopedToAuthenticatedRecipientAndPending(t *testing.
 	})
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/drink-invites/"+inviteID, `{"status":"accepted"}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/invites/"+inviteID, `{"status":"accepted"}`))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
-	request, ok := fake.lastRequest("/rest/v1/drink_invites")
+	request, ok := fake.lastRequest("/rest/v1/invites")
 	if !ok {
-		t.Fatal("drink_invites request was not sent")
+		t.Fatal("invites request was not sent")
 	}
-	if got := request.Query.Get("to_user_id"); got != "eq."+testUserID {
-		t.Fatalf("to_user_id filter = %q", got)
+	if got := request.Query.Get("invitee_user_id"); got != "eq."+testUserID {
+		t.Fatalf("invitee_user_id filter = %q", got)
 	}
 	if got := request.Query.Get("status"); got != "eq.pending" {
 		t.Fatalf("status filter = %q", got)
@@ -717,6 +843,33 @@ func TestRegisterPushTokenScopesToAuthenticatedUser(t *testing.T) {
 	}
 	if !strings.Contains(request.Body, `"user_id":"`+testUserID+`"`) {
 		t.Fatalf("push token body is not scoped to auth user: %s", request.Body)
+	}
+}
+
+func TestUnregisterPushTokenScopesToAuthenticatedUser(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/rest/v1/push_tokens" && req.Method == http.MethodDelete {
+			writeFakeJSON(w, http.StatusOK, []map[string]any{{"token": "device-token"}})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodDelete, "/v1/me/push-token", `{"token":"device-token"}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/push_tokens")
+	if !ok {
+		t.Fatal("push_tokens delete request was not sent")
+	}
+	if got := request.Query.Get("token"); got != "eq.device-token" {
+		t.Fatalf("token filter = %q", got)
+	}
+	if got := request.Query.Get("user_id"); got != "eq."+testUserID {
+		t.Fatalf("user_id filter = %q", got)
 	}
 }
 
@@ -848,6 +1001,27 @@ func TestAdminDeleteUserRejectsSelfDelete(t *testing.T) {
 	}
 }
 
+func TestDeleteOwnAccountUsesAdminAuthDelete(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/auth/v1/admin/users/"+testUserID && req.Method == http.MethodDelete {
+			writeFakeJSON(w, http.StatusOK, map[string]any{})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodDelete, "/v1/me/account", ""))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/auth/v1/admin/users/" + testUserID)
+	if !ok || request.Method != http.MethodDelete {
+		t.Fatalf("admin delete request = %#v", request)
+	}
+}
+
 func TestUpdateFriendRequestAcceptedCreatesFriendship(t *testing.T) {
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
@@ -914,7 +1088,7 @@ func TestUpdateFriendRequestRejectedDoesNotCreateFriendship(t *testing.T) {
 	}
 }
 
-func TestUpdateDrinkInviteAcceptedOnlyCreatesAcceptedNotification(t *testing.T) {
+func TestUpdateInviteAcceptedOnlyCreatesAcceptedNotification(t *testing.T) {
 	inviteID := "33333333-4444-5555-6666-777777777777"
 	for _, tc := range []struct {
 		status                 string
@@ -926,13 +1100,13 @@ func TestUpdateDrinkInviteAcceptedOnlyCreatesAcceptedNotification(t *testing.T) 
 		t.Run(tc.status, func(t *testing.T) {
 			fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 				switch req.URL.Path {
-				case "/rest/v1/drink_invites":
+				case "/rest/v1/invites":
 					if req.Method == http.MethodPatch {
 						writeFakeJSON(w, http.StatusOK, []map[string]any{{
-							"id":           inviteID,
-							"from_user_id": otherUserID,
-							"to_user_id":   testUserID,
-							"status":       tc.status,
+							"id":              inviteID,
+							"inviter_user_id": otherUserID,
+							"invitee_user_id": testUserID,
+							"status":          tc.status,
 						}})
 						return
 					}
@@ -947,7 +1121,7 @@ func TestUpdateDrinkInviteAcceptedOnlyCreatesAcceptedNotification(t *testing.T) 
 			})
 			w := httptest.NewRecorder()
 
-			testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/drink-invites/"+inviteID, `{"status":"`+tc.status+`"}`))
+			testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPatch, "/v1/invites/"+inviteID, `{"status":"`+tc.status+`"}`))
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
@@ -1089,7 +1263,7 @@ func TestMarkNotificationsReadMasksSupabaseError(t *testing.T) {
 	}
 }
 
-func TestListFriendsAttachesDrinkStats(t *testing.T) {
+func TestListFriendsAttachesMemoryStats(t *testing.T) {
 	friendID := otherUserID
 	older := "2026-05-20T10:00:00Z"
 	newer := "2026-05-22T12:30:00Z"
@@ -1105,17 +1279,17 @@ func TestListFriendsAttachesDrinkStats(t *testing.T) {
 			}})
 		case "/rest/v1/daily_statuses":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
-		case "/rest/v1/drink_log_friends":
-			if req.URL.Query().Get("profile_id") == "eq."+testUserID {
+		case "/rest/v1/memory_tagged_users":
+			if req.URL.Query().Get("tagged_user_id") == "eq."+testUserID {
 				writeFakeJSON(w, http.StatusOK, []map[string]any{{
-					"profile_id": testUserID,
-					"drink_logs": map[string]any{"owner_user_id": friendID, "drank_at": newer},
+					"tagged_user_id": testUserID,
+					"memories":       map[string]any{"owner_user_id": friendID, "happened_at": newer},
 				}})
 				return
 			}
 			writeFakeJSON(w, http.StatusOK, []map[string]any{{
-				"profile_id": friendID,
-				"drink_logs": map[string]any{"owner_user_id": testUserID, "drank_at": older},
+				"tagged_user_id": friendID,
+				"memories":       map[string]any{"owner_user_id": testUserID, "happened_at": older},
 			}})
 		default:
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
@@ -1139,23 +1313,23 @@ func TestListFriendsAttachesDrinkStats(t *testing.T) {
 	if !ok {
 		t.Fatalf("user_b missing: %#v", rows[0])
 	}
-	if got := friend["total_drink_count"]; got != float64(2) {
-		t.Fatalf("total_drink_count = %#v", got)
+	if got := friend["total_memory_count"]; got != float64(2) {
+		t.Fatalf("total_memory_count = %#v", got)
 	}
-	if got := friend["last_drink_at"]; got != newer {
-		t.Fatalf("last_drink_at = %#v", got)
+	if got := friend["last_memory_at"]; got != newer {
+		t.Fatalf("last_memory_at = %#v", got)
 	}
 
-	ownedReq, ok := fake.lastRequest("/rest/v1/drink_log_friends")
+	ownedReq, ok := fake.lastRequest("/rest/v1/memory_tagged_users")
 	if !ok {
-		t.Fatal("drink_log_friends request was not sent")
+		t.Fatal("memory_tagged_users request was not sent")
 	}
-	if got := ownedReq.Query.Get("select"); got != "profile_id,drink_logs!inner(owner_user_id,drank_at)" {
+	if got := ownedReq.Query.Get("select"); got != "tagged_user_id,memories!inner(owner_user_id,happened_at)" {
 		t.Fatalf("select = %q", got)
 	}
 }
 
-func TestListFriendsIgnoresDrinkStatsSupabaseError(t *testing.T) {
+func TestListFriendsIgnoresMemoryStatsSupabaseError(t *testing.T) {
 	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/rest/v1/friendships":
@@ -1167,8 +1341,8 @@ func TestListFriendsIgnoresDrinkStatsSupabaseError(t *testing.T) {
 			}})
 		case "/rest/v1/daily_statuses":
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
-		case "/rest/v1/drink_log_friends":
-			http.Error(w, `{"secret":"drink-stats-secret","message":"raw upstream detail"}`, http.StatusInternalServerError)
+		case "/rest/v1/memory_tagged_users":
+			http.Error(w, `{"secret":"memory-stats-secret","message":"raw upstream detail"}`, http.StatusInternalServerError)
 		default:
 			writeFakeJSON(w, http.StatusOK, []map[string]any{})
 		}
@@ -1181,7 +1355,7 @@ func TestListFriendsIgnoresDrinkStatsSupabaseError(t *testing.T) {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if strings.Contains(body, "drink-stats-secret") || strings.Contains(body, "raw upstream detail") {
+	if strings.Contains(body, "memory-stats-secret") || strings.Contains(body, "raw upstream detail") {
 		t.Fatalf("raw upstream body leaked: %s", body)
 	}
 	var rows []map[string]any

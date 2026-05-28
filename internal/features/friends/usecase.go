@@ -8,14 +8,14 @@ import (
 
 type Dependencies struct {
 	Repository Repository
-	Notifier   Notifier
+	Publisher  EventPublisher
 	Logger     Logger
 	Now        func() time.Time
 }
 
 type Usecase struct {
 	repository Repository
-	notifier   Notifier
+	publisher  EventPublisher
 	logger     Logger
 	now        func() time.Time
 }
@@ -25,7 +25,7 @@ func NewUsecase(deps Dependencies) *Usecase {
 	if now == nil {
 		now = time.Now
 	}
-	return &Usecase{repository: deps.Repository, notifier: deps.Notifier, logger: deps.Logger, now: now}
+	return &Usecase{repository: deps.Repository, publisher: deps.Publisher, logger: deps.Logger, now: now}
 }
 
 type ListInput struct {
@@ -54,6 +54,12 @@ type CreateFriendRequestInput struct {
 	FriendID   string
 }
 
+type ListFriendRequestsInput struct {
+	AuthToken string
+	UserID    string
+	Direction string
+}
+
 type UpdateFriendRequestInput struct {
 	AuthToken string
 	RequestID string
@@ -77,9 +83,9 @@ func (u *Usecase) ListFriends(ctx context.Context, input ListInput) ([]map[strin
 	if err := u.repository.AttachTodayStatuses(ctx, input.AuthToken, rows, date); err != nil {
 		return nil, err
 	}
-	if err := u.repository.AttachDrinkStats(ctx, input.AuthToken, userID, rows); err != nil {
+	if err := u.repository.AttachMemoryStats(ctx, input.AuthToken, userID, rows); err != nil {
 		if u.logger != nil {
-			u.logger.Warn("failed to attach friend drink stats", "error", err)
+			u.logger.Warn("failed to attach friend memory stats", "error", err)
 		}
 	}
 	return rows, nil
@@ -93,6 +99,13 @@ func (u *Usecase) CreateFriendship(ctx context.Context, input FriendInput) (map[
 	if friendID == userID {
 		return nil, UserError{Kind: ErrorKindInvalidInput, Message: "cannot add yourself as a friend"}
 	}
+	blocked, err := u.repository.BlockExistsBetweenUsers(ctx, input.AuthToken, userID, friendID)
+	if err != nil {
+		return nil, err
+	}
+	if blocked {
+		return nil, UserError{Kind: ErrorKindConflict, Message: "cannot add blocked user"}
+	}
 	return u.repository.UpsertFriendshipPair(ctx, input.AuthToken, userID, friendID)
 }
 
@@ -102,6 +115,21 @@ func (u *Usecase) UpdateFriendFavorite(ctx context.Context, input FavoriteInput)
 		return nil, err
 	}
 	row, err := u.repository.UpdateFriendFavorite(ctx, input.AuthToken, userID, friendID, input.IsFavorite)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, UserError{Kind: ErrorKindNotFound, Message: "friendship not found"}
+	}
+	return row, nil
+}
+
+func (u *Usecase) DeleteFriendship(ctx context.Context, input FriendInput) (map[string]any, error) {
+	userID, friendID, err := cleanFriendPair(input.UserID, input.FriendID, "friend id")
+	if err != nil {
+		return nil, err
+	}
+	row, err := u.repository.DeleteFriendship(ctx, input.AuthToken, userID, friendID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +152,14 @@ func (u *Usecase) GetFriendRequestStatus(ctx context.Context, input FriendInput)
 		return FriendRequestStatus{}, err
 	}
 	requestState := "none"
+	requestID := ""
 	if !alreadyFriend {
 		request, err := u.repository.PendingFriendRequestBetween(ctx, input.AuthToken, userID, friendID)
 		if err != nil {
 			return FriendRequestStatus{}, err
 		}
 		if request != nil {
+			requestID, _ = request["id"].(string)
 			if request["from_user_id"] == userID {
 				requestState = "outgoing"
 			} else {
@@ -137,7 +167,19 @@ func (u *Usecase) GetFriendRequestStatus(ctx context.Context, input FriendInput)
 			}
 		}
 	}
-	return FriendRequestStatus{AlreadyFriend: alreadyFriend, RequestState: requestState}, nil
+	return FriendRequestStatus{AlreadyFriend: alreadyFriend, RequestState: requestState, RequestID: requestID}, nil
+}
+
+func (u *Usecase) ListFriendRequests(ctx context.Context, input ListFriendRequestsInput) ([]map[string]any, error) {
+	userID, err := CleanUUID(input.UserID, "user id")
+	if err != nil {
+		return nil, err
+	}
+	direction, err := NormalizeRequestDirection(input.Direction)
+	if err != nil {
+		return nil, err
+	}
+	return u.repository.ListPendingFriendRequests(ctx, input.AuthToken, userID, direction)
 }
 
 func (u *Usecase) CreateFriendRequest(ctx context.Context, input CreateFriendRequestInput) (map[string]any, error) {
@@ -156,6 +198,13 @@ func (u *Usecase) CreateFriendRequest(ctx context.Context, input CreateFriendReq
 	if toUserID == fromUserID {
 		return nil, UserError{Kind: ErrorKindInvalidInput, Message: "cannot send a friend request to yourself"}
 	}
+	blocked, err := u.repository.BlockExistsBetweenUsers(ctx, input.AuthToken, fromUserID, toUserID)
+	if err != nil {
+		return nil, err
+	}
+	if blocked {
+		return nil, UserError{Kind: ErrorKindConflict, Message: "cannot send a friend request to blocked user"}
+	}
 	alreadyFriend, err := u.repository.FriendshipExists(ctx, input.AuthToken, fromUserID, toUserID)
 	if err != nil {
 		return nil, err
@@ -167,8 +216,10 @@ func (u *Usecase) CreateFriendRequest(ctx context.Context, input CreateFriendReq
 	if err != nil {
 		return nil, err
 	}
-	if u.notifier != nil {
-		u.notifier.FriendRequestReceived(ctx, input.AuthToken, row)
+	if u.publisher != nil {
+		if event, ok := NewFriendRequestCreatedEvent(row); ok {
+			u.publisher.Publish(ctx, input.AuthToken, event)
+		}
 	}
 	return row, nil
 }
@@ -199,8 +250,10 @@ func (u *Usecase) UpdateFriendRequest(ctx context.Context, input UpdateFriendReq
 			if _, err := u.repository.UpsertFriendshipPair(ctx, input.AuthToken, request.FromUserID, request.ToUserID); err != nil {
 				return nil, err
 			}
-			if u.notifier != nil {
-				u.notifier.FriendRequestAccepted(ctx, input.AuthToken, row)
+			if u.publisher != nil {
+				if event, ok := NewFriendRequestAcceptedEvent(row); ok {
+					u.publisher.Publish(ctx, input.AuthToken, event)
+				}
 			}
 		}
 	}

@@ -15,16 +15,17 @@ const (
 )
 
 type fakeRepository struct {
-	calls          []string
-	friendships    []map[string]any
-	alreadyFriend  bool
-	pendingRequest map[string]any
-	createdRequest map[string]any
-	updatedRequest map[string]any
-	favoriteRow    map[string]any
-	friendshipRow  map[string]any
-	statusesDate   string
-	drinkStatsUser string
+	calls           []string
+	friendships     []map[string]any
+	alreadyFriend   bool
+	blocked         bool
+	pendingRequest  map[string]any
+	createdRequest  map[string]any
+	updatedRequest  map[string]any
+	favoriteRow     map[string]any
+	friendshipRow   map[string]any
+	statusesDate    string
+	memoryStatsUser string
 }
 
 func (f *fakeRepository) ListFriendships(context.Context, string, string) ([]map[string]any, error) {
@@ -38,9 +39,9 @@ func (f *fakeRepository) AttachTodayStatuses(_ context.Context, _ string, _ []ma
 	return nil
 }
 
-func (f *fakeRepository) AttachDrinkStats(_ context.Context, _ string, currentUserID string, _ []map[string]any) error {
+func (f *fakeRepository) AttachMemoryStats(_ context.Context, _ string, currentUserID string, _ []map[string]any) error {
 	f.calls = append(f.calls, "stats")
-	f.drinkStatsUser = currentUserID
+	f.memoryStatsUser = currentUserID
 	return nil
 }
 
@@ -57,9 +58,24 @@ func (f *fakeRepository) UpsertFriendshipPair(context.Context, string, string, s
 	return map[string]any{"id": "friendship"}, nil
 }
 
+func (f *fakeRepository) DeleteFriendship(context.Context, string, string, string) (map[string]any, error) {
+	f.calls = append(f.calls, "delete")
+	return f.friendshipRow, nil
+}
+
 func (f *fakeRepository) FriendshipExists(context.Context, string, string, string) (bool, error) {
 	f.calls = append(f.calls, "exists")
 	return f.alreadyFriend, nil
+}
+
+func (f *fakeRepository) BlockExistsBetweenUsers(context.Context, string, string, string) (bool, error) {
+	f.calls = append(f.calls, "block")
+	return f.blocked, nil
+}
+
+func (f *fakeRepository) ListPendingFriendRequests(context.Context, string, string, RequestDirection) ([]map[string]any, error) {
+	f.calls = append(f.calls, "list_requests")
+	return []map[string]any{{"id": testRequestID}}, nil
 }
 
 func (f *fakeRepository) PendingFriendRequestBetween(context.Context, string, string, string) (map[string]any, error) {
@@ -80,17 +96,12 @@ func (f *fakeRepository) UpdatePendingFriendRequestStatus(context.Context, strin
 	return f.updatedRequest, nil
 }
 
-type fakeNotifier struct {
-	received int
-	accepted int
+type fakePublisher struct {
+	events []DomainEvent
 }
 
-func (f *fakeNotifier) FriendRequestReceived(context.Context, string, map[string]any) {
-	f.received++
-}
-
-func (f *fakeNotifier) FriendRequestAccepted(context.Context, string, map[string]any) {
-	f.accepted++
+func (f *fakePublisher) Publish(_ context.Context, _ string, event DomainEvent) {
+	f.events = append(f.events, event)
 }
 
 func TestListFriendsAttachesStatusAndStats(t *testing.T) {
@@ -107,8 +118,8 @@ func TestListFriendsAttachesStatusAndStats(t *testing.T) {
 	if want := []string{"list", "statuses", "stats"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("calls = %v, want %v", repo.calls, want)
 	}
-	if repo.statusesDate != "2026-05-24" || repo.drinkStatsUser != testUserID {
-		t.Fatalf("date/user = %q/%q", repo.statusesDate, repo.drinkStatsUser)
+	if repo.statusesDate != "2026-05-24" || repo.memoryStatsUser != testUserID {
+		t.Fatalf("date/user = %q/%q", repo.statusesDate, repo.memoryStatsUser)
 	}
 }
 
@@ -128,21 +139,64 @@ func TestGetFriendRequestStatusSelf(t *testing.T) {
 	}
 }
 
+func TestGetFriendRequestStatusIncludesPendingRequestID(t *testing.T) {
+	repo := &fakeRepository{
+		pendingRequest: map[string]any{
+			"id":           testRequestID,
+			"from_user_id": testUserID,
+			"to_user_id":   otherUserID,
+		},
+	}
+	usecase := NewUsecase(Dependencies{Repository: repo})
+
+	status, err := usecase.GetFriendRequestStatus(context.Background(), FriendInput{AuthToken: testAuthToken, UserID: testUserID, FriendID: otherUserID})
+	if err != nil {
+		t.Fatalf("GetFriendRequestStatus returned error: %v", err)
+	}
+	if status.RequestState != "outgoing" || status.RequestID != testRequestID {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestListFriendRequestsDefaultsToAll(t *testing.T) {
+	repo := &fakeRepository{}
+	usecase := NewUsecase(Dependencies{Repository: repo})
+
+	rows, err := usecase.ListFriendRequests(context.Background(), ListFriendRequestsInput{AuthToken: testAuthToken, UserID: testUserID})
+	if err != nil {
+		t.Fatalf("ListFriendRequests returned error: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["id"] != testRequestID {
+		t.Fatalf("rows = %#v", rows)
+	}
+	if want := []string{"list_requests"}; !reflect.DeepEqual(repo.calls, want) {
+		t.Fatalf("calls = %v, want %v", repo.calls, want)
+	}
+}
+
+func TestDeleteFriendshipRequiresExistingRow(t *testing.T) {
+	repo := &fakeRepository{}
+	usecase := NewUsecase(Dependencies{Repository: repo})
+
+	_, err := usecase.DeleteFriendship(context.Background(), FriendInput{AuthToken: testAuthToken, UserID: testUserID, FriendID: otherUserID})
+	assertUserError(t, err, ErrorKindNotFound, "friendship not found")
+}
+
 func TestCreateFriendRequestRejectsExistingFriendBeforeInsert(t *testing.T) {
 	repo := &fakeRepository{alreadyFriend: true}
 	usecase := NewUsecase(Dependencies{Repository: repo})
 
 	_, err := usecase.CreateFriendRequest(context.Background(), CreateFriendRequestInput{AuthToken: testAuthToken, FromUserID: testUserID, ToUserID: otherUserID})
 	assertUserError(t, err, ErrorKindConflict, "already friends")
-	if want := []string{"exists"}; !reflect.DeepEqual(repo.calls, want) {
+	if want := []string{"block", "exists"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("calls = %v, want %v", repo.calls, want)
 	}
 }
 
 func TestCreateFriendRequestCreatesNotification(t *testing.T) {
 	repo := &fakeRepository{}
-	notifier := &fakeNotifier{}
-	usecase := NewUsecase(Dependencies{Repository: repo, Notifier: notifier})
+	publisher := &fakePublisher{}
+	usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 	row, err := usecase.CreateFriendRequest(context.Background(), CreateFriendRequestInput{AuthToken: testAuthToken, FromUserID: testUserID, ToUserID: otherUserID})
 	if err != nil {
@@ -151,15 +205,15 @@ func TestCreateFriendRequestCreatesNotification(t *testing.T) {
 	if row["id"] != testRequestID {
 		t.Fatalf("row = %#v", row)
 	}
-	if notifier.received != 1 {
-		t.Fatalf("received notifications = %d, want 1", notifier.received)
+	if len(publisher.events) != 1 || publisher.events[0].Kind != EventFriendRequestCreated {
+		t.Fatalf("events = %#v, want friend request created", publisher.events)
 	}
 }
 
 func TestUpdateFriendRequestAcceptedCreatesFriendshipAndNotification(t *testing.T) {
 	repo := &fakeRepository{updatedRequest: map[string]any{"id": testRequestID, "from_user_id": otherUserID, "to_user_id": testUserID, "status": "accepted"}}
-	notifier := &fakeNotifier{}
-	usecase := NewUsecase(Dependencies{Repository: repo, Notifier: notifier})
+	publisher := &fakePublisher{}
+	usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 	row, err := usecase.UpdateFriendRequest(context.Background(), UpdateFriendRequestInput{AuthToken: testAuthToken, RequestID: testRequestID, UserID: testUserID, Status: "accepted"})
 	if err != nil {
@@ -171,8 +225,8 @@ func TestUpdateFriendRequestAcceptedCreatesFriendshipAndNotification(t *testing.
 	if want := []string{"update_request", "upsert"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("calls = %v, want %v", repo.calls, want)
 	}
-	if notifier.accepted != 1 {
-		t.Fatalf("accepted notifications = %d, want 1", notifier.accepted)
+	if len(publisher.events) != 1 || publisher.events[0].Kind != EventFriendRequestAccepted {
+		t.Fatalf("events = %#v, want friend request accepted", publisher.events)
 	}
 }
 

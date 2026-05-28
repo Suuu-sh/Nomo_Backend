@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -136,15 +137,15 @@ func (u *Usecase) systemRecipientIDs(ctx context.Context, input CreateSystemInpu
 	return ids, nil
 }
 
-func (u *Usecase) NotifyFriendRequestReceived(ctx context.Context, authToken string, requestRow map[string]any) {
-	requestID, fromUserID, toUserID := FriendRequestIDs(requestRow)
-	if requestID == "" || fromUserID == "" || toUserID == "" || fromUserID == toUserID {
-		return
+func (u *Usecase) NotifyFriendRequestReceived(ctx context.Context, authToken string, requestRow map[string]any) error {
+	requestID, inviterUserID, inviteeUserID := FriendRequestIDs(requestRow)
+	if requestID == "" || inviterUserID == "" || inviteeUserID == "" || inviterUserID == inviteeUserID {
+		return nil
 	}
-	actorName := u.actorName(ctx, authToken, fromUserID, KindFriendRequestReceived)
-	u.tryCreateAndPush(ctx, authToken, Notification{
-		RecipientUserID: toUserID,
-		ActorUserID:     fromUserID,
+	actorName := u.actorName(ctx, authToken, inviterUserID, KindFriendRequestReceived)
+	return u.tryCreateAndPush(ctx, authToken, Notification{
+		RecipientUserID: inviteeUserID,
+		ActorUserID:     inviterUserID,
 		FriendRequestID: requestID,
 		Kind:            KindFriendRequestReceived,
 		Title:           "フレンズ申請が届きました",
@@ -152,15 +153,15 @@ func (u *Usecase) NotifyFriendRequestReceived(ctx context.Context, authToken str
 	})
 }
 
-func (u *Usecase) NotifyFriendRequestAccepted(ctx context.Context, authToken string, requestRow map[string]any) {
-	requestID, fromUserID, toUserID := FriendRequestIDs(requestRow)
-	if requestID == "" || fromUserID == "" || toUserID == "" || fromUserID == toUserID {
-		return
+func (u *Usecase) NotifyFriendRequestAccepted(ctx context.Context, authToken string, requestRow map[string]any) error {
+	requestID, inviterUserID, inviteeUserID := FriendRequestIDs(requestRow)
+	if requestID == "" || inviterUserID == "" || inviteeUserID == "" || inviterUserID == inviteeUserID {
+		return nil
 	}
-	actorName := u.actorName(ctx, authToken, toUserID, KindFriendRequestAccepted)
-	u.tryCreateAndPush(ctx, authToken, Notification{
-		RecipientUserID: fromUserID,
-		ActorUserID:     toUserID,
+	actorName := u.actorName(ctx, authToken, inviteeUserID, KindFriendRequestAccepted)
+	return u.tryCreateAndPush(ctx, authToken, Notification{
+		RecipientUserID: inviterUserID,
+		ActorUserID:     inviteeUserID,
 		FriendRequestID: requestID,
 		Kind:            KindFriendRequestAccepted,
 		Title:           "フレンズ申請が承認されました",
@@ -168,81 +169,85 @@ func (u *Usecase) NotifyFriendRequestAccepted(ctx context.Context, authToken str
 	})
 }
 
-func (u *Usecase) NotifyDrinkInviteReceived(ctx context.Context, authToken string, inviteRow map[string]any) {
-	invite := DrinkInviteFromRow(inviteRow)
-	if invite.ID == "" || invite.FromUserID == "" || invite.ToUserID == "" || invite.FromUserID == invite.ToUserID {
-		return
+func (u *Usecase) NotifyInviteReceived(ctx context.Context, authToken string, inviteRow map[string]any) error {
+	invite := InviteFromRow(inviteRow)
+	if invite.ID == "" || invite.InviterUserID == "" || invite.InviteeUserID == "" || invite.InviterUserID == invite.InviteeUserID {
+		return nil
 	}
-	actorName := u.actorName(ctx, authToken, invite.FromUserID, KindDrinkInviteReceived)
-	u.tryCreateAndPush(ctx, authToken, Notification{
-		RecipientUserID:  invite.ToUserID,
-		ActorUserID:      invite.FromUserID,
-		DrinkInviteID:    invite.ID,
-		NotificationDate: DateOrEmpty(invite.InviteDate),
-		Kind:             KindDrinkInviteReceived,
+	actorName := u.actorName(ctx, authToken, invite.InviterUserID, KindInviteReceived)
+	return u.tryCreateAndPush(ctx, authToken, Notification{
+		RecipientUserID:  invite.InviteeUserID,
+		ActorUserID:      invite.InviterUserID,
+		InviteID:         invite.ID,
+		NotificationDate: DateOrEmpty(invite.ScheduledDate),
+		Kind:             KindInviteReceived,
 		Title:            "お誘いが届きました",
-		Message:          actorName + "さんから" + InviteDatePhrase(invite.InviteDate, u.now()) + "のお誘いが届きました。",
+		Message:          actorName + "さんから" + ScheduledDatePhrase(invite.ScheduledDate, u.now()) + "のお誘いが届きました。",
 	})
 }
 
-func (u *Usecase) NotifyDrinkInviteAccepted(ctx context.Context, authToken string, inviteRow map[string]any) {
-	invite := DrinkInviteFromRow(inviteRow)
-	if invite.ID == "" || invite.FromUserID == "" || invite.ToUserID == "" || invite.FromUserID == invite.ToUserID {
-		return
+func (u *Usecase) NotifyInviteAccepted(ctx context.Context, authToken string, inviteRow map[string]any) error {
+	invite := InviteFromRow(inviteRow)
+	if invite.ID == "" || invite.InviterUserID == "" || invite.InviteeUserID == "" || invite.InviterUserID == invite.InviteeUserID {
+		return nil
 	}
-	actorName := u.actorName(ctx, authToken, invite.ToUserID, KindDrinkInviteAccepted)
-	u.tryCreateAndPush(ctx, authToken, Notification{
-		RecipientUserID:  invite.FromUserID,
-		ActorUserID:      invite.ToUserID,
-		DrinkInviteID:    invite.ID,
-		NotificationDate: DateOrEmpty(invite.InviteDate),
-		Kind:             KindDrinkInviteAccepted,
+	actorName := u.actorName(ctx, authToken, invite.InviteeUserID, KindInviteAccepted)
+	return u.tryCreateAndPush(ctx, authToken, Notification{
+		RecipientUserID:  invite.InviterUserID,
+		ActorUserID:      invite.InviteeUserID,
+		InviteID:         invite.ID,
+		NotificationDate: DateOrEmpty(invite.ScheduledDate),
+		Kind:             KindInviteAccepted,
 		Title:            "お誘いが承認されました",
-		Message:          actorName + "さんが" + InviteDatePhrase(invite.InviteDate, u.now()) + "のお誘いを承認しました。",
+		Message:          actorName + "さんが" + ScheduledDatePhrase(invite.ScheduledDate, u.now()) + "のお誘いを承認しました。",
 	})
 }
 
-func (u *Usecase) NotifyDrinkLogTagged(ctx context.Context, authToken, logID, ownerUserID string, friendIDs []string) {
-	if logID == "" || ownerUserID == "" || len(friendIDs) == 0 {
-		return
+func (u *Usecase) NotifyMemoryTagged(ctx context.Context, authToken, memoryID, ownerUserID string, friendIDs []string) error {
+	if memoryID == "" || ownerUserID == "" || len(friendIDs) == 0 {
+		return nil
 	}
-	actorName := u.actorName(ctx, authToken, ownerUserID, KindDrinkLogTagged)
+	actorName := u.actorName(ctx, authToken, ownerUserID, KindMemoryTagged)
 	seen := map[string]bool{}
+	var firstErr error
 	for _, rawID := range friendIDs {
 		friendID := strings.TrimSpace(rawID)
 		if friendID == "" || friendID == ownerUserID || seen[friendID] {
 			continue
 		}
 		seen[friendID] = true
-		u.tryCreateAndPush(ctx, authToken, Notification{
+		if err := u.tryCreateAndPush(ctx, authToken, Notification{
 			RecipientUserID: friendID,
 			ActorUserID:     ownerUserID,
-			DrinkLogID:      logID,
-			Kind:            KindDrinkLogTagged,
+			MemoryID:        memoryID,
+			Kind:            KindMemoryTagged,
 			Title:           "思い出に追加されました",
 			Message:         actorName + "さんがあなたを一緒に過ごしたフレンズに追加しました。",
-		})
+		}); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
-func (u *Usecase) NotifyDrinkLogLiked(ctx context.Context, authToken, logID, actorUserID string) {
-	if logID == "" || actorUserID == "" {
-		return
+func (u *Usecase) NotifyMemoryLiked(ctx context.Context, authToken, memoryID, actorUserID string) error {
+	if memoryID == "" || actorUserID == "" {
+		return nil
 	}
-	recipientUserID, err := u.repository.DrinkLogOwnerUserID(ctx, authToken, logID)
+	recipientUserID, err := u.repository.MemoryOwnerUserID(ctx, authToken, memoryID)
 	if err != nil {
-		u.warn("failed to fetch drink log for like notification", KindDrinkLogLike, err)
-		return
+		u.warn("failed to fetch memory for like notification", KindMemoryLike, err)
+		return err
 	}
 	if recipientUserID == "" || recipientUserID == actorUserID {
-		return
+		return nil
 	}
-	actorName := u.actorName(ctx, authToken, actorUserID, KindDrinkLogLike)
-	u.tryCreateAndPush(ctx, authToken, Notification{
+	actorName := u.actorName(ctx, authToken, actorUserID, KindMemoryLike)
+	return u.tryCreateAndPush(ctx, authToken, Notification{
 		RecipientUserID: recipientUserID,
 		ActorUserID:     actorUserID,
-		DrinkLogID:      logID,
-		Kind:            KindDrinkLogLike,
+		MemoryID:        memoryID,
+		Kind:            KindMemoryLike,
 		Title:           "思い出にいいねされました",
 		Message:         actorName + "さんがあなたの思い出にいいねしました。",
 	})
@@ -261,23 +266,25 @@ func (u *Usecase) CreateTodayReservationReminders(ctx context.Context, authToken
 		return err
 	}
 	for _, invite := range invites {
-		actorUserID := invite.FromUserID
+		actorUserID := invite.InviterUserID
 		if actorUserID == userID {
-			actorUserID = invite.ToUserID
+			actorUserID = invite.InviteeUserID
 		}
 		if invite.ID == "" || actorUserID == "" || actorUserID == userID {
 			continue
 		}
 		actorName := u.actorName(ctx, authToken, actorUserID, KindTodayReservationReminder)
-		u.tryCreateAndPush(ctx, authToken, Notification{
+		if err := u.tryCreateAndPush(ctx, authToken, Notification{
 			RecipientUserID:  userID,
 			ActorUserID:      actorUserID,
-			DrinkInviteID:    invite.ID,
+			InviteID:         invite.ID,
 			NotificationDate: date,
 			Kind:             KindTodayReservationReminder,
 			Title:            "今日の予定があります",
 			Message:          actorName + "さんとの予定が今日あります。",
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -294,25 +301,44 @@ func (u *Usecase) actorName(ctx context.Context, authToken, userID string, event
 	return name
 }
 
-func (u *Usecase) tryCreateAndPush(ctx context.Context, authToken string, notification Notification) {
+func (u *Usecase) tryCreateAndPush(ctx context.Context, authToken string, notification Notification) error {
 	created, err := u.repository.CreateNotification(ctx, notification)
 	if err != nil {
 		u.warn("failed to create notification", notification.Kind, err)
-		return
+		return err
 	}
 	if !created || u.pushSender == nil {
-		return
+		return nil
 	}
 	tokens, err := u.repository.PushTokens(ctx, notification.RecipientUserID)
 	if err != nil {
 		u.warn("failed to fetch push tokens", notification.Kind, err)
-		return
+		return err
 	}
+	var firstErr error
 	for _, token := range tokens {
 		if err := u.pushSender.Send(ctx, token, notification.Title, notification.Message, notification.PushData()); err != nil {
 			u.warn("failed to send push notification", notification.Kind, err)
+			if isInvalidPushTokenError(err) {
+				if deleteErr := u.repository.DeletePushToken(ctx, token); deleteErr != nil {
+					u.warn("failed to delete invalid push token", notification.Kind, deleteErr)
+				}
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
+}
+
+type invalidPushTokenError interface {
+	InvalidPushToken() bool
+}
+
+func isInvalidPushTokenError(err error) bool {
+	var tokenErr invalidPushTokenError
+	return errors.As(err, &tokenErr) && tokenErr.InvalidPushToken()
 }
 
 func (u *Usecase) warn(message string, event Kind, err error) {

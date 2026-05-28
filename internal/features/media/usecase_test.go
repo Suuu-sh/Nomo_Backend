@@ -10,7 +10,8 @@ import (
 const testUserID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 type fakeStorage struct {
-	target UploadTarget
+	target      UploadTarget
+	displayPath string
 }
 
 func (f *fakeStorage) CreateSignedUploadURL(_ context.Context, target UploadTarget) (UploadURL, error) {
@@ -18,7 +19,16 @@ func (f *fakeStorage) CreateSignedUploadURL(_ context.Context, target UploadTarg
 	return UploadURL{Bucket: target.Bucket, Path: target.Path, Token: "token", SignedURL: "https://example.test/upload?token=token", ContentType: target.ContentType}, nil
 }
 
-func TestCreateUploadURLBuildsDrinkLogPhotoPath(t *testing.T) {
+func (f *fakeStorage) CreateSignedDisplayURL(_ context.Context, bucket, objectPath string, _ int) (string, error) {
+	f.displayPath = bucket + "/" + objectPath
+	return "https://example.test/display", nil
+}
+
+func (f *fakeStorage) ListObjects(context.Context, string, string, int) ([]StorageObject, error) {
+	return nil, nil
+}
+
+func TestCreateUploadURLBuildsMemoryPhotoPath(t *testing.T) {
 	storage := &fakeStorage{}
 	usecase := NewUsecase(Dependencies{
 		Storage: storage,
@@ -29,7 +39,7 @@ func TestCreateUploadURLBuildsDrinkLogPhotoPath(t *testing.T) {
 	})
 
 	result, err := usecase.CreateUploadURL(context.Background(), UploadRequest{
-		Kind:          "drink_log_photo",
+		Kind:          "memory_photo",
 		UserID:        testUserID,
 		FileExtension: "jpg",
 		ContentType:   "image/jpeg",
@@ -37,7 +47,7 @@ func TestCreateUploadURLBuildsDrinkLogPhotoPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUploadURL returned error: %v", err)
 	}
-	wantPath := "users/" + testUserID + "/drink_logs/20260524T123000.123456789_abcdef.jpg"
+	wantPath := "users/" + testUserID + "/memories/20260524T123000.123456789_abcdef.jpg"
 	if result.Bucket != PhotoBucket || result.Path != wantPath || result.ContentType != "image/jpeg" {
 		t.Fatalf("result = %#v, want path %s", result, wantPath)
 	}
@@ -50,7 +60,7 @@ func TestCreateUploadURLRejectsUnsupportedTypes(t *testing.T) {
 	usecase := NewUsecase(Dependencies{Storage: &fakeStorage{}})
 
 	_, err := usecase.CreateUploadURL(context.Background(), UploadRequest{
-		Kind:          "drink_log_photo",
+		Kind:          "memory_photo",
 		UserID:        testUserID,
 		FileExtension: ".gif",
 		ContentType:   "image/gif",
@@ -62,7 +72,7 @@ func TestCreateUploadURLRejectsMismatchedTypes(t *testing.T) {
 	usecase := NewUsecase(Dependencies{Storage: &fakeStorage{}})
 
 	_, err := usecase.CreateUploadURL(context.Background(), UploadRequest{
-		Kind:          "drink_log_photo",
+		Kind:          "memory_photo",
 		UserID:        testUserID,
 		FileExtension: ".png",
 		ContentType:   "image/jpeg",
@@ -70,9 +80,35 @@ func TestCreateUploadURLRejectsMismatchedTypes(t *testing.T) {
 	assertUserError(t, err, ErrorKindInvalidInput, "content_type does not match file_extension")
 }
 
+func TestCreateDisplayURLValidatesMemoryPhotoPath(t *testing.T) {
+	storage := &fakeStorage{}
+	usecase := NewUsecase(Dependencies{Storage: storage})
+
+	result, err := usecase.CreateDisplayURL(context.Background(), DisplayURLRequest{
+		UserID: testUserID,
+		Path:   "users/" + testUserID + "/memories/photo.jpg",
+	})
+	if err != nil {
+		t.Fatalf("CreateDisplayURL returned error: %v", err)
+	}
+	if result.SignedURL != "https://example.test/display" || storage.displayPath != "nomo-photos/users/"+testUserID+"/memories/photo.jpg" {
+		t.Fatalf("result = %#v displayPath = %q", result, storage.displayPath)
+	}
+}
+
+func TestCreateDisplayURLRejectsInvalidPath(t *testing.T) {
+	usecase := NewUsecase(Dependencies{Storage: &fakeStorage{}})
+
+	_, err := usecase.CreateDisplayURL(context.Background(), DisplayURLRequest{
+		UserID: testUserID,
+		Path:   "../secret.jpg",
+	})
+	assertUserError(t, err, ErrorKindInvalidInput, "path is invalid")
+}
+
 func TestEscapedStoragePathKeepsFolderSeparators(t *testing.T) {
-	got := escapedStoragePath("nomo-photos", "users/abc/drink logs/photo 1.jpg")
-	if !strings.Contains(got, "/") || got != "nomo-photos/users/abc/drink%20logs/photo%201.jpg" {
+	got := escapedStoragePath("nomo-photos", "users/abc/memories/photo 1.jpg")
+	if !strings.Contains(got, "/") || got != "nomo-photos/users/abc/memories/photo%201.jpg" {
 		t.Fatalf("escaped path = %q", got)
 	}
 }

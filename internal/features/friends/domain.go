@@ -63,6 +63,27 @@ func NormalizeRequestStatus(value string) (RequestStatus, error) {
 	}
 }
 
+type RequestDirection string
+
+const (
+	RequestDirectionAll      RequestDirection = "all"
+	RequestDirectionIncoming RequestDirection = "incoming"
+	RequestDirectionOutgoing RequestDirection = "outgoing"
+)
+
+func NormalizeRequestDirection(value string) (RequestDirection, error) {
+	direction := RequestDirection(strings.TrimSpace(value))
+	if direction == "" {
+		return RequestDirectionAll, nil
+	}
+	switch direction {
+	case RequestDirectionAll, RequestDirectionIncoming, RequestDirectionOutgoing:
+		return direction, nil
+	default:
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "direction must be all, incoming, or outgoing"}
+	}
+}
+
 func OrderedPair(a, b string) (string, string) {
 	if a < b {
 		return a, b
@@ -73,6 +94,7 @@ func OrderedPair(a, b string) (string, string) {
 type FriendRequestStatus struct {
 	AlreadyFriend bool   `json:"already_friend"`
 	RequestState  string `json:"request_state"`
+	RequestID     string `json:"request_id,omitempty"`
 }
 
 type FriendRequest struct {
@@ -90,14 +112,52 @@ func FriendRequestFromRow(row map[string]any) FriendRequest {
 	return FriendRequest{ID: id, FromUserID: fromUserID, ToUserID: toUserID, Status: status}
 }
 
-type DrinkStats struct {
-	Count       int
-	LastDrinkAt time.Time
+type DomainEventKind string
+
+const (
+	EventFriendRequestCreated  DomainEventKind = "friend_request.created"
+	EventFriendRequestAccepted DomainEventKind = "friend_request.accepted"
+)
+
+type DomainEvent struct {
+	Kind    DomainEventKind
+	Request FriendRequest
 }
 
-func (s *DrinkStats) Add(drankAt time.Time) {
+func NewFriendRequestCreatedEvent(row map[string]any) (DomainEvent, bool) {
+	request := FriendRequestFromRow(row)
+	if request.ID == "" || request.FromUserID == "" || request.ToUserID == "" || request.FromUserID == request.ToUserID {
+		return DomainEvent{}, false
+	}
+	return DomainEvent{Kind: EventFriendRequestCreated, Request: request}, true
+}
+
+func NewFriendRequestAcceptedEvent(row map[string]any) (DomainEvent, bool) {
+	request := FriendRequestFromRow(row)
+	if request.ID == "" || request.FromUserID == "" || request.ToUserID == "" || request.FromUserID == request.ToUserID {
+		return DomainEvent{}, false
+	}
+	request.Status = string(RequestStatusAccepted)
+	return DomainEvent{Kind: EventFriendRequestAccepted, Request: request}, true
+}
+
+func (e DomainEvent) RequestRow() map[string]any {
+	return map[string]any{
+		"id":           e.Request.ID,
+		"from_user_id": e.Request.FromUserID,
+		"to_user_id":   e.Request.ToUserID,
+		"status":       e.Request.Status,
+	}
+}
+
+type MemoryStats struct {
+	Count        int
+	LastMemoryAt time.Time
+}
+
+func (s *MemoryStats) Add(happenedAt time.Time) {
 	s.Count++
-	if drankAt.After(s.LastDrinkAt) {
-		s.LastDrinkAt = drankAt
+	if happenedAt.After(s.LastMemoryAt) {
+		s.LastMemoryAt = happenedAt
 	}
 }
