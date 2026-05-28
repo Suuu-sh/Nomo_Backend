@@ -4,6 +4,20 @@ Last updated: 2026-05-28
 
 この document は Mobile / Backend / AI agent が同じ contract を参照するための要約です。Backend は Feature Slice 型の軽量 Clean Architecture を基本にし、以下の endpoint を優先 contract として扱います。
 
+
+## Data model naming freeze
+
+Nomo は飲み専用アプリではないため、public app schema / Backend API では generic naming を正とする。
+
+- 投稿: `memories` / `/v1/memories`
+- 投稿タグ: `memory_tagged_users`
+- いいね: `memory_likes`
+- 投稿通報: `memory_reports`
+- feed 非表示: `memory_hides`
+- 予定/誘い: `invites` / `/v1/invites`
+
+旧 `drink_logs` / `drink_invites` / `drink_log_*` / `feed_hidden_drink_logs` は baseline migration の legacy cleanup 以外で使わない。Mobile / Backend / docs / tests の新規変更は上記 naming に揃える。
+
 ## Auth
 
 通常 endpoint は以下の headers が必須です。
