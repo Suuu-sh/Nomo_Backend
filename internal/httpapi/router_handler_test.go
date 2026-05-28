@@ -570,6 +570,44 @@ func TestAdminCreateNotificationRejectsInvalidRecipient(t *testing.T) {
 	}
 }
 
+func TestCreateMediaUploadURLCreatesUserScopedDrinkLogPhotoPath(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasPrefix(req.URL.Path, "/storage/v1/object/upload/sign/nomo-photos/users/"+testUserID+"/drink_logs/") {
+			writeFakeJSON(w, http.StatusOK, map[string]any{
+				"url":   "/object/upload/sign/nomo-photos/users/" + testUserID + "/drink_logs/photo.jpg?token=upload-token",
+				"token": "upload-token",
+			})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/media/upload-url", `{"kind":"drink_log_photo","file_extension":".jpg","content_type":"image/jpeg"}`))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["bucket"] != "nomo-photos" || body["token"] != "upload-token" || body["content_type"] != "image/jpeg" {
+		t.Fatalf("response = %#v", body)
+	}
+	path, _ := body["path"].(string)
+	if !strings.HasPrefix(path, "users/"+testUserID+"/drink_logs/") || !strings.HasSuffix(path, ".jpg") {
+		t.Fatalf("path = %q", path)
+	}
+	request, ok := fake.lastRequest("/storage/v1/object/upload/sign/nomo-photos/" + path)
+	if !ok {
+		t.Fatalf("storage signed upload request for %q was not sent", path)
+	}
+	if request.Method != http.MethodPost {
+		t.Fatalf("storage method = %s, want POST", request.Method)
+	}
+}
+
 func TestRegisterPushTokenValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -709,6 +747,42 @@ func TestUpdateProfileValidatesUserIDAndScopesToAuthUser(t *testing.T) {
 	}
 	if got := request.Query.Get("id"); got != "eq."+testUserID {
 		t.Fatalf("profile id filter = %q", got)
+	}
+}
+
+func TestUpsertProfileNormalizesAndScopesToAuthUser(t *testing.T) {
+	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/rest/v1/profiles" && req.Method == http.MethodPost {
+			writeFakeJSON(w, http.StatusOK, []map[string]any{})
+			return
+		}
+		writeFakeJSON(w, http.StatusOK, []map[string]any{})
+	})
+	w := httptest.NewRecorder()
+
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPut, "/v1/me/profile", `{"user_id":" valid_user ","display_name":" Name ","gender":"","character_key":"","avatar_url":" avatar.png "}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	request, ok := fake.lastRequest("/rest/v1/profiles")
+	if !ok {
+		t.Fatal("profiles upsert request was not sent")
+	}
+	if got := request.Query.Get("on_conflict"); got != "id" {
+		t.Fatalf("on_conflict = %q", got)
+	}
+	for _, want := range []string{
+		`"id":"` + testUserID + `"`,
+		`"user_id":"valid_user"`,
+		`"display_name":"Name"`,
+		`"gender":"unspecified"`,
+		`"character_key":"avatar"`,
+		`"avatar_url":"avatar.png"`,
+	} {
+		if !strings.Contains(request.Body, want) {
+			t.Fatalf("profile body %s does not contain %s", request.Body, want)
+		}
 	}
 }
 

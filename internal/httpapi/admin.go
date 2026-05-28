@@ -7,19 +7,18 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
+
+	"github.com/yota/nomo/backend/internal/features/drinklogs"
+	"github.com/yota/nomo/backend/internal/features/profiles"
 )
 
 const officialProfileUserID = "nomo_official"
 const officialProfileDisplayName = "Nomo公式"
 const officialProfileEmail = "nomo-official@official.nomo.app"
-
-var adminUserIDPattern = regexp.MustCompile(`^[A-Za-z0-9_]{3,24}$`)
 
 func (r *router) adminMe(w http.ResponseWriter, req *http.Request, adminUser AuthUser) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -78,7 +77,7 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 	input.Password = strings.TrimSpace(input.Password)
 	input.UserID = strings.TrimSpace(input.UserID)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
-	input.Gender = normalizeProfileGender(input.Gender)
+	input.Gender = profiles.NormalizeGender(input.Gender)
 	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
 	input.Status = strings.TrimSpace(input.Status)
 	statusDate, errMessage := cleanDateOnlyOrToday(input.StatusDate, "status_date")
@@ -90,7 +89,7 @@ func (r *router) adminCreateUser(w http.ResponseWriter, req *http.Request, _ Aut
 		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
-	if !isValidProfileGender(input.Gender) {
+	if !profiles.IsValidGender(input.Gender) {
 		writeError(w, http.StatusBadRequest, "gender must be male, female, or unspecified")
 		return
 	}
@@ -294,6 +293,81 @@ func (r *router) adminListDrinkLogs(w http.ResponseWriter, req *http.Request, _ 
 	q.Set("limit", "80")
 	var rows []map[string]any
 	if err := r.deps.AdminSupabase.Get(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "drink_logs", q, &rows); err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) adminListDrinkLogReports(w http.ResponseWriter, req *http.Request, _ AuthUser) {
+	status := strings.TrimSpace(req.URL.Query().Get("status"))
+	rows, err := r.adminDrinkLogReports(req, true, status)
+	if err != nil {
+		if status != "" && status != "all" {
+			writeSupabaseError(w, err)
+			return
+		}
+		rows, err = r.adminDrinkLogReports(req, false, status)
+	}
+	if err != nil {
+		writeSupabaseError(w, err)
+		return
+	}
+	for _, row := range rows {
+		if _, ok := row["status"].(string); !ok {
+			row["status"] = "pending"
+		}
+		if _, ok := row["hidden"].(bool); !ok {
+			row["hidden"] = true
+		}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) adminDrinkLogReports(req *http.Request, includeModerationColumns bool, status string) ([]map[string]any, error) {
+	selectColumns := "id,drink_log_id,reporter_user_id,reason,created_at,drink_log:drink_logs!drink_log_reports_drink_log_id_fkey(id,owner_user_id,drank_at,memo,photo_path,is_official,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,avatar_url)),reporter:profiles!drink_log_reports_reporter_user_id_fkey(id,user_id,display_name,avatar_url)"
+	if includeModerationColumns {
+		selectColumns = "id,drink_log_id,reporter_user_id,reason,status,hidden_at,reviewed_at,reviewed_by_user_id,moderation_note,created_at,drink_log:drink_logs!drink_log_reports_drink_log_id_fkey(id,owner_user_id,drank_at,memo,photo_path,is_official,owner:profiles!drink_logs_owner_user_id_fkey(id,user_id,display_name,avatar_url)),reporter:profiles!drink_log_reports_reporter_user_id_fkey(id,user_id,display_name,avatar_url)"
+	}
+	q := url.Values{}
+	q.Set("select", selectColumns)
+	q.Set("order", "created_at.desc")
+	q.Set("limit", "100")
+	if includeModerationColumns && status != "" && status != "all" {
+		q.Set("status", "eq."+status)
+	}
+	var rows []map[string]any
+	if err := r.deps.AdminSupabase.Get(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "drink_log_reports", q, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *router) adminUpdateDrinkLogReport(w http.ResponseWriter, req *http.Request, adminUser AuthUser) {
+	reportID, errMessage := cleanUUID(req.PathValue("id"), "report id")
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	var input AdminUpdateDrinkLogReportRequest
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	status, err := drinklogs.CleanModerationStatus(input.Status)
+	if err != nil {
+		writeDrinkLogError(w, err)
+		return
+	}
+	payload := map[string]any{
+		"status":              string(status),
+		"reviewed_at":         time.Now().UTC().Format(time.RFC3339),
+		"reviewed_by_user_id": adminUser.ID,
+		"moderation_note":     shortText(input.ModerationNote, 500),
+	}
+	q := url.Values{}
+	q.Set("id", "eq."+reportID)
+	var rows []map[string]any
+	if err := r.deps.AdminSupabase.Patch(req.Context(), r.deps.Config.SupabaseServiceRoleKey, "drink_log_reports", q, payload, &rows); err != nil {
 		writeSupabaseError(w, err)
 		return
 	}
@@ -619,12 +693,11 @@ func (r *router) adminInsertDrinkLogFriends(req *http.Request, drinkLogID string
 }
 
 func validateAdminProfileInput(userID, displayName string) string {
-	if !adminUserIDPattern.MatchString(userID) {
-		return "user_id must be 3-24 letters, numbers, or underscores"
+	if _, err := profiles.CleanUserID(userID); err != nil {
+		return err.Error()
 	}
-	nameLength := utf8.RuneCountInString(displayName)
-	if nameLength < 1 || nameLength > 40 {
-		return "display_name must be 1-40 characters"
+	if _, err := profiles.CleanDisplayName(displayName); err != nil {
+		return err.Error()
 	}
 	return ""
 }

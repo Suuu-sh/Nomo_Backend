@@ -2,6 +2,14 @@
 
 Go API for Nomo. It proxies authenticated requests to Supabase/PostgREST using the caller's Supabase JWT so RLS remains enforced by Supabase.
 
+## Architecture
+
+Nomo Backend uses a lightweight, AI-friendly architecture policy for future
+feature work:
+
+- [AI駆動開発向け Backend 設計ガイド](docs/architecture/ai-driven-feature-slice.md)
+- [ADR 0001: AI駆動開発向けに Feature Slice 型の軽量 Clean Architecture を採用する](docs/adr/0001-ai-driven-feature-slice-clean-architecture.md)
+
 ## Local run
 
 ```sh
@@ -45,6 +53,7 @@ Authenticated requests must include:
 - `PUT /v1/daily-status`
 - `GET /v1/drink-invites/today-reservations?date=YYYY-MM-DD`
 - `GET /v1/drink-invites/incoming-pending?date=YYYY-MM-DD`
+- `GET /v1/drink-invites/outgoing-active?date=YYYY-MM-DD`
 - `POST /v1/drink-invites`
 - `PATCH /v1/drink-invites/{id}`
 - `GET /v1/notifications`
