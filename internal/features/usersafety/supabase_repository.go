@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yota/nomo/backend/internal/supabase"
+	"github.com/yota/tomo/backend/internal/supabase"
 )
 
 type SupabaseRepository struct {

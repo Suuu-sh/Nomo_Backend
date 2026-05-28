@@ -12,13 +12,13 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/yota/nomo/backend/internal/features/memories"
-	"github.com/yota/nomo/backend/internal/features/profiles"
+	"github.com/yota/tomo/backend/internal/features/memories"
+	"github.com/yota/tomo/backend/internal/features/profiles"
 )
 
-const officialProfileUserID = "nomo_official"
-const officialProfileDisplayName = "Nomo公式"
-const officialProfileEmail = "nomo-official@official.nomo.app"
+const officialProfileUserID = "tomo_official"
+const officialProfileDisplayName = "Tomo公式"
+const officialProfileEmail = "tomo-official@official.tomo.app"
 
 func (r *router) adminMe(w http.ResponseWriter, req *http.Request, adminUser AuthUser) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -562,7 +562,7 @@ func randomAdminPassword() (string, error) {
 	if _, err := rand.Read(bytes[:]); err != nil {
 		return "", err
 	}
-	return "Nomo!" + hex.EncodeToString(bytes[:]), nil
+	return "Tomo!" + hex.EncodeToString(bytes[:]), nil
 }
 
 func (r *router) adminDeleteMemory(w http.ResponseWriter, req *http.Request, _ AuthUser) {
@@ -607,8 +607,8 @@ func (r *router) admin(next func(http.ResponseWriter, *http.Request, AuthUser)) 
 			writeError(w, http.StatusUnauthorized, "invalid auth user")
 			return
 		}
-		if headerUserID := strings.TrimSpace(req.Header.Get("X-Nomo-User-ID")); headerUserID != "" {
-			cleanHeaderUserID, errMessage := cleanUUID(headerUserID, "X-Nomo-User-ID")
+		if headerUserID := strings.TrimSpace(req.Header.Get("X-Tomo-User-ID")); headerUserID != "" {
+			cleanHeaderUserID, errMessage := cleanUUID(headerUserID, "X-Tomo-User-ID")
 			if errMessage != "" {
 				writeError(w, http.StatusBadRequest, errMessage)
 				return

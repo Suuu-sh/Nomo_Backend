@@ -1,3 +1,3 @@
-module github.com/yota/nomo/backend
+module github.com/yota/tomo/backend
 
 go 1.23

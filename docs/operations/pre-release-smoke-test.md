@@ -1,8 +1,8 @@
-# Nomo pre-release smoke test checklist
+# Tomo pre-release smoke test checklist
 
 Last updated: 2026-05-28
 
-Run this before TestFlight / production release. For Nomo dev checks, use iOS Simulator connected to dev Render/Supabase unless explicitly testing production/TestFlight.
+Run this before TestFlight / production release. For Tomo dev checks, use iOS Simulator connected to dev Render/Supabase unless explicitly testing production/TestFlight.
 
 
 ## Scripted checks
@@ -20,20 +20,20 @@ Run Supabase runtime RLS / GRANT check after migration is applied:
 SUPABASE_URL=... \
 SUPABASE_PUBLISHABLE_KEY=... \
 SUPABASE_SERVICE_ROLE_KEY=... \
-NOMO_SMOKE_EMAIL=... \
-NOMO_SMOKE_PASSWORD=... \
-python3 scripts/nomo_supabase_runtime_check.py
+TOMO_SMOKE_EMAIL=... \
+TOMO_SMOKE_PASSWORD=... \
+python3 scripts/tomo_supabase_runtime_check.py
 ```
 
 Run Backend API smoke against dev/prod Render:
 
 ```bash
-NOMO_BACKEND_URL=https://dev-nomo-backend.onrender.com \
+TOMO_BACKEND_URL=https://dev-nomo-backend.onrender.com \
 SUPABASE_URL=... \
 SUPABASE_PUBLISHABLE_KEY=... \
-NOMO_SMOKE_EMAIL=... \
-NOMO_SMOKE_PASSWORD=... \
-python3 scripts/nomo_backend_smoke.py --mutating
+TOMO_SMOKE_EMAIL=... \
+TOMO_SMOKE_PASSWORD=... \
+python3 scripts/tomo_backend_smoke.py --mutating
 ```
 
 Production で `--mutating` を使う場合は、専用 smoke account を使う。
@@ -101,7 +101,7 @@ Production で `--mutating` を使う場合は、専用 smoke account を使う�
 
 - Backend/Supabase target: `https://dev-nomo-backend.onrender.com` + dev-nomo Supabase.
 - Render deploy: `dev-nomo-backend` live on Backend commit `e867637` (`Remove remaining drink-specific feed naming`).
-- GitHub Actions: latest `Supabase Dev Migrate` run on `development` succeeded: https://github.com/Suuu-sh/Nomo_Mobile/actions/runs/26572788398
+- GitHub Actions: latest `Supabase Dev Migrate` run on `development` succeeded: https://github.com/Suuu-sh/Tomo_Mobile/actions/runs/26572788398
 - Executed with prepared dev users: login, profile bootstrap, daily status/month endpoint, friendship, signed photo upload URL, actual signed Storage upload, memory create, memory list, home feed with uploaded photo (`feed_prop = memory`), like, report, hide/unhide, invite create/list/accept/reservations, mute/unmute, block/unblock, user report, notifications list.
 - Verified old REST tables return missing: `drink_logs`, `drink_invites`, `drink_log_reports`, `feed_hidden_drink_logs`.
 - Not covered by API smoke: real APNs/FCM device delivery and manual visual QA on the latest Simulator build.
@@ -111,6 +111,6 @@ Production で `--mutating` を使う場合は、専用 smoke account を使う�
 - Device: iOS Simulator `iPhone 17`.
 - Backend/Supabase target: dev environment.
 - Result: build/run succeeded and an existing Admin session loaded. Feed/profile/settings surfaces rendered. Admin screen and 通報 tab loaded; status/note/post-delete controls were visible without executing destructive actions.
-- GitHub Actions: latest `Supabase Dev Migrate` run on `development` succeeded: https://github.com/Suuu-sh/Nomo_Mobile/actions/runs/26548996618
+- GitHub Actions: latest `Supabase Dev Migrate` run on `development` succeeded: https://github.com/Suuu-sh/Tomo_Mobile/actions/runs/26548996618
 - Not fully executed in this pass: mutating manual flows (`memory create`, `photo upload`, `invite/accept`, `block/mute/hide/report`) and push notification delivery. Run those with prepared dev accounts before production/TestFlight release.
 

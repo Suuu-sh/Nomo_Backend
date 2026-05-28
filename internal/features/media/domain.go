@@ -50,7 +50,7 @@ type UploadKind string
 
 const (
 	UploadKindMemoryPhoto UploadKind = "memory_photo"
-	PhotoBucket                      = "nomo-photos"
+	PhotoBucket                      = "tomo-photos"
 )
 
 type UploadRequest struct {

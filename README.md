@@ -1,10 +1,10 @@
-# Nomo Backend
+# Tomo Backend
 
-Go API for Nomo. It proxies authenticated requests to Supabase/PostgREST using the caller's Supabase JWT so RLS remains enforced by Supabase.
+Go API for Tomo. It proxies authenticated requests to Supabase/PostgREST using the caller's Supabase JWT so RLS remains enforced by Supabase.
 
 ## Architecture
 
-Nomo Backend uses a lightweight, AI-friendly architecture policy for future
+Tomo Backend uses a lightweight, AI-friendly architecture policy for future
 feature work:
 
 - [AI駆動開発向け Backend 設計ガイド](docs/architecture/ai-driven-feature-slice.md)
@@ -29,7 +29,7 @@ curl http://localhost:8080/healthz
 Authenticated requests must include:
 
 - `Authorization: Bearer <supabase access token>`
-- `X-Nomo-User-ID: <auth.users.id>`
+- `X-Tomo-User-ID: <auth.users.id>`
 
 ## Endpoints
 
