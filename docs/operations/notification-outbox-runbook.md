@@ -17,7 +17,7 @@ Normal request handling still creates and dispatches notifications in-process. T
 
 ## Required access
 
-- Admin Supabase Auth user included in `TOMO_ADMIN_EMAILS`
+- Admin Supabase Auth user included in `OHEY_ADMIN_EMAILS`
 - Backend production URL
 - Valid access token from the admin app/session
 
@@ -28,7 +28,7 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY` or Firebase service-account values to M
 ```bash
 curl -sS \
   -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
-  -H "X-Tomo-User-ID: $ADMIN_USER_ID" \
+  -H "X-Ohey-User-ID: $ADMIN_USER_ID" \
   "https://nomo-backend-nezf.onrender.com/v1/admin/notification-outbox?status=failed" | jq .
 ```
 
@@ -53,7 +53,7 @@ Check:
 ```bash
 curl -sS -X POST \
   -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
-  -H "X-Tomo-User-ID: $ADMIN_USER_ID" \
+  -H "X-Ohey-User-ID: $ADMIN_USER_ID" \
   "https://nomo-backend-nezf.onrender.com/v1/admin/notification-outbox/process?limit=50" | jq .
 ```
 
@@ -85,7 +85,7 @@ Enable Render cron only after user volume or notification reliability requiremen
 
 Future cron settings:
 
-- service name: `tomo-notification-outbox-worker`
+- service name: `ohey-notification-outbox-worker`
 - schedule: `*/5 * * * *`
-- docker command: `/tomo-notification-worker`
-- env: `TOMO_ENV`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `FCM_SERVICE_ACCOUNT_JSON`, `ALLOWED_ORIGINS`
+- docker command: `/ohey-notification-worker`
+- env: `OHEY_ENV`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `FCM_SERVICE_ACCOUNT_JSON`, `ALLOWED_ORIGINS`

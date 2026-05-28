@@ -1,17 +1,17 @@
 services:
   - type: web
-    name: tomo-backend
+    name: ohey-backend
     runtime: docker
     plan: free
     healthCheckPath: /healthz
     envVars:
-      - key: TOMO_ENV
+      - key: OHEY_ENV
         value: production
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
-      - key: TOMO_ADMIN_EMAILS
+      - key: OHEY_ADMIN_EMAILS
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
