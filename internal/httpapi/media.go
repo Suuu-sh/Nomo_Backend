@@ -14,6 +14,10 @@ type MediaUploadURLRequest struct {
 	FileExtension string `json:"file_extension"`
 }
 
+type MediaDisplayURLRequest struct {
+	Path string `json:"path"`
+}
+
 func (r *router) createMediaUploadURL(w http.ResponseWriter, req *http.Request, _ string) {
 	var input MediaUploadURLRequest
 	if !decodeJSONBody(w, req, &input) {
@@ -24,6 +28,22 @@ func (r *router) createMediaUploadURL(w http.ResponseWriter, req *http.Request, 
 		UserID:        req.Header.Get("X-Nomo-User-ID"),
 		ContentType:   input.ContentType,
 		FileExtension: input.FileExtension,
+	})
+	if err != nil {
+		writeMediaError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (r *router) createMediaDisplayURL(w http.ResponseWriter, req *http.Request, _ string) {
+	var input MediaDisplayURLRequest
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	result, err := r.mediaUsecase().CreateDisplayURL(req.Context(), media.DisplayURLRequest{
+		UserID: req.Header.Get("X-Nomo-User-ID"),
+		Path:   input.Path,
 	})
 	if err != nil {
 		writeMediaError(w, err)

@@ -13,5 +13,27 @@ services:
         sync: false
       - key: NOMO_ADMIN_EMAILS
         sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FCM_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
+  - type: cron
+    name: nomo-notification-outbox-worker
+    runtime: docker
+    schedule: "*/5 * * * *"
+    dockerCommand: /nomo-notification-worker
+    envVars:
+      - key: NOMO_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FCM_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: ALLOWED_ORIGINS
         value: "*"

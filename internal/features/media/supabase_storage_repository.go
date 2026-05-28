@@ -113,6 +113,58 @@ func (r *SupabaseStorageRepository) DeleteObject(ctx context.Context, bucket, ob
 	return nil
 }
 
+func (r *SupabaseStorageRepository) CreateSignedDisplayURL(ctx context.Context, bucket, objectPath string, expiresInSeconds int) (string, error) {
+	if r.supabaseURL == "" || r.serviceRoleKey == "" {
+		return "", errors.New("supabase storage is not configured")
+	}
+	if expiresInSeconds <= 0 {
+		expiresInSeconds = DisplayURLTTLSeconds
+	}
+	endpoint := r.supabaseURL + "/storage/v1/object/sign/" + escapedStoragePath(bucket, objectPath)
+	body, err := json.Marshal(map[string]any{"expiresIn": expiresInSeconds})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.serviceRoleKey)
+	req.Header.Set("apikey", r.serviceRoleKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("supabase storage signed display url failed: status=%d body=%s", resp.StatusCode, string(data))
+	}
+	var out struct {
+		SignedURL string `json:"signedURL"`
+		SignedUrl string `json:"signedUrl"`
+		URL       string `json:"url"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", err
+	}
+	signedURL := strings.TrimSpace(out.SignedURL)
+	if signedURL == "" {
+		signedURL = strings.TrimSpace(out.SignedUrl)
+	}
+	if signedURL == "" {
+		signedURL = strings.TrimSpace(out.URL)
+	}
+	if signedURL == "" {
+		return "", UserError{Kind: ErrorKindUpstream, Message: "signed display url response missing url"}
+	}
+	if strings.HasPrefix(signedURL, "/") {
+		signedURL = r.supabaseURL + "/storage/v1" + signedURL
+	}
+	return signedURL, nil
+}
+
 func escapedStoragePath(bucket, objectPath string) string {
 	parts := append([]string{bucket}, strings.Split(objectPath, "/")...)
 	for i, part := range parts {

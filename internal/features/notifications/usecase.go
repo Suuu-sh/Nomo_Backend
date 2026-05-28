@@ -136,13 +136,13 @@ func (u *Usecase) systemRecipientIDs(ctx context.Context, input CreateSystemInpu
 	return ids, nil
 }
 
-func (u *Usecase) NotifyFriendRequestReceived(ctx context.Context, authToken string, requestRow map[string]any) {
+func (u *Usecase) NotifyFriendRequestReceived(ctx context.Context, authToken string, requestRow map[string]any) error {
 	requestID, fromUserID, toUserID := FriendRequestIDs(requestRow)
 	if requestID == "" || fromUserID == "" || toUserID == "" || fromUserID == toUserID {
-		return
+		return nil
 	}
 	actorName := u.actorName(ctx, authToken, fromUserID, KindFriendRequestReceived)
-	u.tryCreateAndPush(ctx, authToken, Notification{
+	return u.tryCreateAndPush(ctx, authToken, Notification{
 		RecipientUserID: toUserID,
 		ActorUserID:     fromUserID,
 		FriendRequestID: requestID,
@@ -152,13 +152,13 @@ func (u *Usecase) NotifyFriendRequestReceived(ctx context.Context, authToken str
 	})
 }
 
-func (u *Usecase) NotifyFriendRequestAccepted(ctx context.Context, authToken string, requestRow map[string]any) {
+func (u *Usecase) NotifyFriendRequestAccepted(ctx context.Context, authToken string, requestRow map[string]any) error {
 	requestID, fromUserID, toUserID := FriendRequestIDs(requestRow)
 	if requestID == "" || fromUserID == "" || toUserID == "" || fromUserID == toUserID {
-		return
+		return nil
 	}
 	actorName := u.actorName(ctx, authToken, toUserID, KindFriendRequestAccepted)
-	u.tryCreateAndPush(ctx, authToken, Notification{
+	return u.tryCreateAndPush(ctx, authToken, Notification{
 		RecipientUserID: fromUserID,
 		ActorUserID:     toUserID,
 		FriendRequestID: requestID,
@@ -168,13 +168,13 @@ func (u *Usecase) NotifyFriendRequestAccepted(ctx context.Context, authToken str
 	})
 }
 
-func (u *Usecase) NotifyDrinkInviteReceived(ctx context.Context, authToken string, inviteRow map[string]any) {
+func (u *Usecase) NotifyDrinkInviteReceived(ctx context.Context, authToken string, inviteRow map[string]any) error {
 	invite := DrinkInviteFromRow(inviteRow)
 	if invite.ID == "" || invite.FromUserID == "" || invite.ToUserID == "" || invite.FromUserID == invite.ToUserID {
-		return
+		return nil
 	}
 	actorName := u.actorName(ctx, authToken, invite.FromUserID, KindDrinkInviteReceived)
-	u.tryCreateAndPush(ctx, authToken, Notification{
+	return u.tryCreateAndPush(ctx, authToken, Notification{
 		RecipientUserID:  invite.ToUserID,
 		ActorUserID:      invite.FromUserID,
 		DrinkInviteID:    invite.ID,
@@ -185,13 +185,13 @@ func (u *Usecase) NotifyDrinkInviteReceived(ctx context.Context, authToken strin
 	})
 }
 
-func (u *Usecase) NotifyDrinkInviteAccepted(ctx context.Context, authToken string, inviteRow map[string]any) {
+func (u *Usecase) NotifyDrinkInviteAccepted(ctx context.Context, authToken string, inviteRow map[string]any) error {
 	invite := DrinkInviteFromRow(inviteRow)
 	if invite.ID == "" || invite.FromUserID == "" || invite.ToUserID == "" || invite.FromUserID == invite.ToUserID {
-		return
+		return nil
 	}
 	actorName := u.actorName(ctx, authToken, invite.ToUserID, KindDrinkInviteAccepted)
-	u.tryCreateAndPush(ctx, authToken, Notification{
+	return u.tryCreateAndPush(ctx, authToken, Notification{
 		RecipientUserID:  invite.FromUserID,
 		ActorUserID:      invite.ToUserID,
 		DrinkInviteID:    invite.ID,
@@ -202,43 +202,47 @@ func (u *Usecase) NotifyDrinkInviteAccepted(ctx context.Context, authToken strin
 	})
 }
 
-func (u *Usecase) NotifyDrinkLogTagged(ctx context.Context, authToken, logID, ownerUserID string, friendIDs []string) {
+func (u *Usecase) NotifyDrinkLogTagged(ctx context.Context, authToken, logID, ownerUserID string, friendIDs []string) error {
 	if logID == "" || ownerUserID == "" || len(friendIDs) == 0 {
-		return
+		return nil
 	}
 	actorName := u.actorName(ctx, authToken, ownerUserID, KindDrinkLogTagged)
 	seen := map[string]bool{}
+	var firstErr error
 	for _, rawID := range friendIDs {
 		friendID := strings.TrimSpace(rawID)
 		if friendID == "" || friendID == ownerUserID || seen[friendID] {
 			continue
 		}
 		seen[friendID] = true
-		u.tryCreateAndPush(ctx, authToken, Notification{
+		if err := u.tryCreateAndPush(ctx, authToken, Notification{
 			RecipientUserID: friendID,
 			ActorUserID:     ownerUserID,
 			DrinkLogID:      logID,
 			Kind:            KindDrinkLogTagged,
 			Title:           "思い出に追加されました",
 			Message:         actorName + "さんがあなたを一緒に過ごしたフレンズに追加しました。",
-		})
+		}); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
-func (u *Usecase) NotifyDrinkLogLiked(ctx context.Context, authToken, logID, actorUserID string) {
+func (u *Usecase) NotifyDrinkLogLiked(ctx context.Context, authToken, logID, actorUserID string) error {
 	if logID == "" || actorUserID == "" {
-		return
+		return nil
 	}
 	recipientUserID, err := u.repository.DrinkLogOwnerUserID(ctx, authToken, logID)
 	if err != nil {
 		u.warn("failed to fetch drink log for like notification", KindDrinkLogLike, err)
-		return
+		return err
 	}
 	if recipientUserID == "" || recipientUserID == actorUserID {
-		return
+		return nil
 	}
 	actorName := u.actorName(ctx, authToken, actorUserID, KindDrinkLogLike)
-	u.tryCreateAndPush(ctx, authToken, Notification{
+	return u.tryCreateAndPush(ctx, authToken, Notification{
 		RecipientUserID: recipientUserID,
 		ActorUserID:     actorUserID,
 		DrinkLogID:      logID,
@@ -269,7 +273,7 @@ func (u *Usecase) CreateTodayReservationReminders(ctx context.Context, authToken
 			continue
 		}
 		actorName := u.actorName(ctx, authToken, actorUserID, KindTodayReservationReminder)
-		u.tryCreateAndPush(ctx, authToken, Notification{
+		if err := u.tryCreateAndPush(ctx, authToken, Notification{
 			RecipientUserID:  userID,
 			ActorUserID:      actorUserID,
 			DrinkInviteID:    invite.ID,
@@ -277,7 +281,9 @@ func (u *Usecase) CreateTodayReservationReminders(ctx context.Context, authToken
 			Kind:             KindTodayReservationReminder,
 			Title:            "今日の予定があります",
 			Message:          actorName + "さんとの予定が今日あります。",
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -294,25 +300,30 @@ func (u *Usecase) actorName(ctx context.Context, authToken, userID string, event
 	return name
 }
 
-func (u *Usecase) tryCreateAndPush(ctx context.Context, authToken string, notification Notification) {
+func (u *Usecase) tryCreateAndPush(ctx context.Context, authToken string, notification Notification) error {
 	created, err := u.repository.CreateNotification(ctx, notification)
 	if err != nil {
 		u.warn("failed to create notification", notification.Kind, err)
-		return
+		return err
 	}
 	if !created || u.pushSender == nil {
-		return
+		return nil
 	}
 	tokens, err := u.repository.PushTokens(ctx, notification.RecipientUserID)
 	if err != nil {
 		u.warn("failed to fetch push tokens", notification.Kind, err)
-		return
+		return err
 	}
+	var firstErr error
 	for _, token := range tokens {
 		if err := u.pushSender.Send(ctx, token, notification.Title, notification.Message, notification.PushData()); err != nil {
 			u.warn("failed to send push notification", notification.Kind, err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }
 
 func (u *Usecase) warn(message string, event Kind, err error) {

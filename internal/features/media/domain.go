@@ -76,6 +76,53 @@ type UploadURL struct {
 	ContentType string `json:"content_type"`
 }
 
+type DisplayURLRequest struct {
+	UserID string
+	Path   string
+}
+
+type DisplayURL struct {
+	Bucket    string `json:"bucket"`
+	Path      string `json:"path"`
+	SignedURL string `json:"signed_url"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
+const DisplayURLTTLSeconds = 60 * 60
+
+func CleanDrinkLogPhotoPath(value string) (string, error) {
+	path := strings.TrimSpace(value)
+	if path == "" {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "path is required"}
+	}
+	if len(path) > 512 {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "path is too long"}
+	}
+	if strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "path is invalid"}
+	}
+	if !strings.HasPrefix(path, "users/") || !strings.Contains(path, "/drink_logs/") {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "path must be a drink-log photo"}
+	}
+	_, _, err := cleanPhotoType(pathExtension(path), "")
+	if err != nil {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "path file type is unsupported"}
+	}
+	return path, nil
+}
+
+func pathExtension(path string) string {
+	name := path
+	if slash := strings.LastIndex(name, "/"); slash >= 0 {
+		name = name[slash+1:]
+	}
+	dot := strings.LastIndex(name, ".")
+	if dot < 0 {
+		return ""
+	}
+	return name[dot:]
+}
+
 func NewUploadTarget(input UploadRequest, now time.Time, randomSuffix func() string) (UploadTarget, error) {
 	userID, err := CleanUUID(input.UserID, "user id")
 	if err != nil {

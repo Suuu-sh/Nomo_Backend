@@ -1030,3 +1030,102 @@ Trade-off:
 
 - Storage delete が失敗しても API response は成功する。失敗は logger warn で観測する。
 - orphan object の定期検出、signed display URL の Backend 統一、report/hidden 時の photo visibility 制御は次段階。
+
+## 2026-05-28 追加実装: Mobile Safety UI / Outbox Retry / API Contract
+
+### Mobile safety UI connection
+
+Home feed の投稿メニューから以下を呼び出す。
+
+- `hide`: `POST /v1/feed-hidden-drink-logs`
+- `mute`: `POST /v1/user-mutes`
+- `block`: `POST /v1/user-blocks`
+- `report`: `POST /v1/drink-logs/{id}/report`
+
+判断理由:
+
+- 通報だけでなく、ユーザー本人が即時に feed を整えられる。
+- hide は投稿単位、mute/block は user 単位に分け、重さの違う操作を混同しない。
+- block は destructive action として確認 sheet を挟む。
+
+Trade-off:
+
+- mute/block 解除 UI はまだ未接続。Backend endpoint はあるため、settings / profile menu から後で足す。
+- 投稿メニューに safety action が増えるため、将来は「安全」サブメニューに分ける余地がある。
+
+### Feed pagination mobile connection
+
+Mobile `HomeFeedController` は初回 `limit=20` で取得し、PageView の末尾近くで `feed_cursor` を使って追加取得する。
+
+判断理由:
+
+- 投稿数増加時に初回 Home 表示の payload を抑えられる。
+- Backend ranking / cursor contract を Mobile に接続し、将来の ranking 変更に耐えやすくする。
+
+Trade-off:
+
+- response envelope は互換性維持のため array のまま。`next_cursor` は最後の row の `feed_cursor` から読む。
+- PageView は index が進んだ時だけ load more するため、極端に短い feed では次回操作まで追加取得しない場合がある。
+
+### Notification outbox retry
+
+Domain event は `notification_outbox` に `pending` として保存し、in-process dispatch の結果で `processed` / `failed` に更新する。
+失敗時は `last_error` と exponential backoff 用の `next_attempt_at` を保存する。
+
+追加した retry entrypoint:
+
+- `GET /v1/admin/notification-outbox`
+- `POST /v1/admin/notification-outbox/process`
+- `/nomo-notification-worker` binary
+- Render cron: `nomo-notification-outbox-worker` every 5 minutes
+
+判断理由:
+
+- event 作成と notification/push dispatch の間で失敗しても、failed row を後で再処理できる。
+- admin endpoint で状態を見られるので、公開後の調査がしやすい。
+- cron worker は web server と同じ image で動かし、環境変数と code path を揃える。
+
+Trade-off:
+
+- notification row 作成後の push 失敗は `last_error` に残るが、既存 unique constraint により retry 時に in-app notification は重複しない。push 再送の完全保証は token 単位 outbox を追加する次段階。
+- Render cron は production の `SUPABASE_SERVICE_ROLE_KEY` と `FCM_SERVICE_ACCOUNT_JSON` 設定が必須。
+
+### Block cleanup
+
+`POST /v1/user-blocks` 成功時、Backend は service role があれば以下を整理する。
+
+- 既存 friendship を削除
+- 自分が送った pending friend request は `cancelled`
+- 相手から来た pending friend request は `rejected`
+- 自分が送った pending drink invite は `cancelled`
+- 相手から来た pending drink invite は `rejected`
+
+判断理由:
+
+- block 後も pending 状態が残ると通知・招待・関係表示で事故が起きる。
+- status update にして履歴を残し、物理削除より運用調査しやすくする。
+
+Trade-off:
+
+- block 解除しても friendship / request / invite は自動復元しない。
+- service role 未設定環境では cleanup は no-op になり、RLS fallback に依存する。
+
+### Backend-signed display URL
+
+Mobile は raw `photo_path` を受け取ったら `POST /v1/media/display-url` を優先して signed display URL を取得する。
+失敗した場合のみ従来の Supabase client signing に fallback する。
+
+判断理由:
+
+- Storage 表示 URL の生成責務を Backend に寄せ、将来 visibility / report / hidden との整合性を取りやすくする。
+- Mobile に Storage policy の詳細を持たせにくくする。
+
+Trade-off:
+
+- feed item ごとに display-url call が増える。将来は feed endpoint 側で signed URL を batch 付与する方が効率的。
+- 現段階では path validation は drink log photo path 形式の検証まで。閲覧権限は feed visibility と RLS に依存する。
+
+### API contract doc
+
+API contract は `/docs/api/backend-api-contract.md` に分離した。
+今後 endpoint / request / response を変える時は、実装と同じ commit でこの contract を更新する。

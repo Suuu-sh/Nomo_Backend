@@ -9,6 +9,7 @@ feature work:
 
 - [AI駆動開発向け Backend 設計ガイド](docs/architecture/ai-driven-feature-slice.md)
 - [ADR 0001: AI駆動開発向けに Feature Slice 型の軽量 Clean Architecture を採用する](docs/adr/0001-ai-driven-feature-slice-clean-architecture.md)
+- [Backend API Contract](docs/api/backend-api-contract.md)
 
 ## Local run
 
@@ -49,7 +50,16 @@ Authenticated requests must include:
 - `PUT /v1/drink-logs/{id}/like`
 - `DELETE /v1/drink-logs/{id}/like`
 - `POST /v1/drink-logs/{id}/report`
+- `POST /v1/feed-hidden-drink-logs`
+- `DELETE /v1/feed-hidden-drink-logs/{drink_log_id}`
+- `POST /v1/user-mutes`
+- `DELETE /v1/user-mutes/{user_id}`
+- `POST /v1/user-blocks`
+- `DELETE /v1/user-blocks/{user_id}`
+- `POST /v1/media/upload-url`
+- `POST /v1/media/display-url`
 - `GET /v1/daily-status?date=YYYY-MM-DD`
+- `GET /v1/daily-statuses/month?month=YYYY-MM`
 - `PUT /v1/daily-status`
 - `GET /v1/drink-invites/today-reservations?date=YYYY-MM-DD`
 - `GET /v1/drink-invites/incoming-pending?date=YYYY-MM-DD`
@@ -79,6 +89,10 @@ Available endpoints:
 - `PATCH /v1/admin/users/{id}`
 - `DELETE /v1/admin/users/{id}`
 - `GET /v1/admin/drink-logs`
+- `GET /v1/admin/drink-log-reports`
+- `PATCH /v1/admin/drink-log-reports/{id}`
+- `GET /v1/admin/notification-outbox`
+- `POST /v1/admin/notification-outbox/process`
 - `POST /v1/admin/drink-logs`
 - `PATCH /v1/admin/drink-logs/{id}`
 - `DELETE /v1/admin/drink-logs/{id}`

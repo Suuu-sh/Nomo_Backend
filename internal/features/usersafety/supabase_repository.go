@@ -3,16 +3,19 @@ package usersafety
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"github.com/yota/nomo/backend/internal/supabase"
 )
 
 type SupabaseRepository struct {
-	client *supabase.Client
+	client         *supabase.Client
+	adminClient    *supabase.Client
+	serviceRoleKey string
 }
 
-func NewSupabaseRepository(client *supabase.Client) *SupabaseRepository {
-	return &SupabaseRepository{client: client}
+func NewSupabaseRepository(client, adminClient *supabase.Client, serviceRoleKey string) *SupabaseRepository {
+	return &SupabaseRepository{client: client, adminClient: adminClient, serviceRoleKey: serviceRoleKey}
 }
 
 func (r *SupabaseRepository) BlockUser(ctx context.Context, authToken string, relation UserRelation) (map[string]any, error) {
@@ -70,6 +73,60 @@ func (r *SupabaseRepository) UnhideDrinkLog(ctx context.Context, authToken strin
 	q.Set("drink_log_id", "eq."+hidden.DrinkLogID)
 	var ignored []map[string]any
 	return r.client.Delete(ctx, authToken, "feed_hidden_drink_logs", q, &ignored)
+}
+
+func (r *SupabaseRepository) CleanupBlockedRelations(ctx context.Context, relation UserRelation) error {
+	if r.adminClient == nil || r.serviceRoleKey == "" {
+		return nil
+	}
+	if err := r.deleteFriendship(ctx, relation); err != nil {
+		return err
+	}
+	if err := r.closeFriendRequests(ctx, relation); err != nil {
+		return err
+	}
+	return r.closeDrinkInvites(ctx, relation)
+}
+
+func (r *SupabaseRepository) deleteFriendship(ctx context.Context, relation UserRelation) error {
+	q := url.Values{}
+	q.Set("or", "(and(user_a_id.eq."+relation.ActorUserID+",user_b_id.eq."+relation.TargetUserID+"),and(user_a_id.eq."+relation.TargetUserID+",user_b_id.eq."+relation.ActorUserID+"))")
+	var ignored []map[string]any
+	return r.adminClient.Delete(ctx, r.serviceRoleKey, "friendships", q, &ignored)
+}
+
+func (r *SupabaseRepository) closeFriendRequests(ctx context.Context, relation UserRelation) error {
+	respondedAt := time.Now().UTC().Format(time.RFC3339)
+	outgoing := url.Values{}
+	outgoing.Set("from_user_id", "eq."+relation.ActorUserID)
+	outgoing.Set("to_user_id", "eq."+relation.TargetUserID)
+	outgoing.Set("status", "eq.pending")
+	var ignored []map[string]any
+	if err := r.adminClient.Patch(ctx, r.serviceRoleKey, "friend_requests", outgoing, map[string]any{"status": "cancelled", "responded_at": respondedAt}, &ignored); err != nil {
+		return err
+	}
+	incoming := url.Values{}
+	incoming.Set("from_user_id", "eq."+relation.TargetUserID)
+	incoming.Set("to_user_id", "eq."+relation.ActorUserID)
+	incoming.Set("status", "eq.pending")
+	return r.adminClient.Patch(ctx, r.serviceRoleKey, "friend_requests", incoming, map[string]any{"status": "rejected", "responded_at": respondedAt}, &ignored)
+}
+
+func (r *SupabaseRepository) closeDrinkInvites(ctx context.Context, relation UserRelation) error {
+	respondedAt := time.Now().UTC().Format(time.RFC3339)
+	outgoing := url.Values{}
+	outgoing.Set("from_user_id", "eq."+relation.ActorUserID)
+	outgoing.Set("to_user_id", "eq."+relation.TargetUserID)
+	outgoing.Set("status", "eq.pending")
+	var ignored []map[string]any
+	if err := r.adminClient.Patch(ctx, r.serviceRoleKey, "drink_invites", outgoing, map[string]any{"status": "cancelled", "responded_at": respondedAt}, &ignored); err != nil {
+		return err
+	}
+	incoming := url.Values{}
+	incoming.Set("from_user_id", "eq."+relation.TargetUserID)
+	incoming.Set("to_user_id", "eq."+relation.ActorUserID)
+	incoming.Set("status", "eq.pending")
+	return r.adminClient.Patch(ctx, r.serviceRoleKey, "drink_invites", incoming, map[string]any{"status": "rejected", "responded_at": respondedAt}, &ignored)
 }
 
 func firstMap(rows []map[string]any, fallback map[string]any) map[string]any {

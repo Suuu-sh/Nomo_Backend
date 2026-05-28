@@ -485,7 +485,7 @@ func (p friendRequestEventPublisher) Publish(ctx context.Context, authToken stri
 	row := event.RequestRow()
 	switch event.Kind {
 	case friends.EventFriendRequestCreated:
-		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(ctx, authToken, notificationOutboxEvent{
 			EventKind:       string(event.Kind),
 			AggregateType:   "friend_request",
 			AggregateID:     event.Request.ID,
@@ -493,9 +493,8 @@ func (p friendRequestEventPublisher) Publish(ctx context.Context, authToken stri
 			RecipientUserID: event.Request.ToUserID,
 			Payload:         row,
 		})
-		p.router.createFriendRequestReceivedNotification(p.req, authToken, row)
 	case friends.EventFriendRequestAccepted:
-		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(ctx, authToken, notificationOutboxEvent{
 			EventKind:       string(event.Kind),
 			AggregateType:   "friend_request",
 			AggregateID:     event.Request.ID,
@@ -503,7 +502,6 @@ func (p friendRequestEventPublisher) Publish(ctx context.Context, authToken stri
 			RecipientUserID: event.Request.FromUserID,
 			Payload:         row,
 		})
-		p.router.createFriendRequestAcceptedNotification(p.req, authToken, row)
 	}
 }
 
@@ -519,7 +517,7 @@ func (p drinkInviteEventPublisher) Publish(_ context.Context, authToken string, 
 	row := event.InviteRow()
 	switch event.Kind {
 	case drinkinvites.EventDrinkInviteCreated:
-		p.router.recordNotificationOutboxEvent(p.req.Context(), notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(p.req.Context(), authToken, notificationOutboxEvent{
 			EventKind:       string(event.Kind),
 			AggregateType:   "drink_invite",
 			AggregateID:     event.Invite.ID,
@@ -527,9 +525,8 @@ func (p drinkInviteEventPublisher) Publish(_ context.Context, authToken string, 
 			RecipientUserID: event.Invite.ToUserID,
 			Payload:         row,
 		})
-		p.router.createDrinkInviteReceivedNotification(p.req, authToken, row)
 	case drinkinvites.EventDrinkInviteAccepted:
-		p.router.recordNotificationOutboxEvent(p.req.Context(), notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(p.req.Context(), authToken, notificationOutboxEvent{
 			EventKind:       string(event.Kind),
 			AggregateType:   "drink_invite",
 			AggregateID:     event.Invite.ID,
@@ -537,7 +534,6 @@ func (p drinkInviteEventPublisher) Publish(_ context.Context, authToken string, 
 			RecipientUserID: event.Invite.FromUserID,
 			Payload:         row,
 		})
-		p.router.createDrinkInviteAcceptedNotification(p.req, authToken, row)
 	}
 }
 
@@ -607,25 +603,23 @@ func (p drinkLogEventPublisher) Publish(ctx context.Context, authToken string, e
 	}
 	switch event.Kind {
 	case drinklogs.EventDrinkLogTagged:
-		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(ctx, authToken, notificationOutboxEvent{
 			EventKind:     string(event.Kind),
 			AggregateType: "drink_log",
 			AggregateID:   event.LogID,
 			ActorUserID:   event.ActorUserID,
 			Payload:       payload,
 		})
-		p.router.createDrinkLogTaggedNotifications(p.req, authToken, event.LogID, event.OwnerUserID, event.FriendIDs)
 	case drinklogs.EventDrinkLogLiked:
-		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(ctx, authToken, notificationOutboxEvent{
 			EventKind:     string(event.Kind),
 			AggregateType: "drink_log",
 			AggregateID:   event.LogID,
 			ActorUserID:   event.ActorUserID,
 			Payload:       payload,
 		})
-		p.router.createDrinkLogLikeNotification(p.req, authToken, event.LogID, event.ActorUserID)
 	case drinklogs.EventDrinkLogReported:
-		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+		p.router.enqueueAndProcessNotificationOutboxEvent(ctx, authToken, notificationOutboxEvent{
 			EventKind:     string(event.Kind),
 			AggregateType: "drink_log",
 			AggregateID:   event.LogID,
@@ -658,7 +652,7 @@ func writeDrinkLogError(w http.ResponseWriter, err error) {
 
 func (r *router) userSafetyUsecase() *usersafety.Usecase {
 	return usersafety.NewUsecase(usersafety.Dependencies{
-		Repository: usersafety.NewSupabaseRepository(r.deps.Supabase),
+		Repository: usersafety.NewSupabaseRepository(r.deps.Supabase, r.deps.AdminSupabase, r.deps.Config.SupabaseServiceRoleKey),
 	})
 }
 

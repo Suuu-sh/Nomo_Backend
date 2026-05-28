@@ -31,7 +31,14 @@ func (u *Usecase) BlockUser(ctx context.Context, input UserTargetInput) (map[str
 	if err != nil {
 		return nil, err
 	}
-	return u.repository.BlockUser(ctx, input.AuthToken, relation)
+	row, err := u.repository.BlockUser(ctx, input.AuthToken, relation)
+	if err != nil {
+		return nil, err
+	}
+	if err := u.repository.CleanupBlockedRelations(ctx, relation); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 func (u *Usecase) UnblockUser(ctx context.Context, input UserTargetInput) error {

@@ -10,12 +10,18 @@ import (
 const testUserID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 type fakeStorage struct {
-	target UploadTarget
+	target      UploadTarget
+	displayPath string
 }
 
 func (f *fakeStorage) CreateSignedUploadURL(_ context.Context, target UploadTarget) (UploadURL, error) {
 	f.target = target
 	return UploadURL{Bucket: target.Bucket, Path: target.Path, Token: "token", SignedURL: "https://example.test/upload?token=token", ContentType: target.ContentType}, nil
+}
+
+func (f *fakeStorage) CreateSignedDisplayURL(_ context.Context, bucket, objectPath string, _ int) (string, error) {
+	f.displayPath = bucket + "/" + objectPath
+	return "https://example.test/display", nil
 }
 
 func TestCreateUploadURLBuildsDrinkLogPhotoPath(t *testing.T) {
@@ -68,6 +74,32 @@ func TestCreateUploadURLRejectsMismatchedTypes(t *testing.T) {
 		ContentType:   "image/jpeg",
 	})
 	assertUserError(t, err, ErrorKindInvalidInput, "content_type does not match file_extension")
+}
+
+func TestCreateDisplayURLValidatesDrinkLogPhotoPath(t *testing.T) {
+	storage := &fakeStorage{}
+	usecase := NewUsecase(Dependencies{Storage: storage})
+
+	result, err := usecase.CreateDisplayURL(context.Background(), DisplayURLRequest{
+		UserID: testUserID,
+		Path:   "users/" + testUserID + "/drink_logs/photo.jpg",
+	})
+	if err != nil {
+		t.Fatalf("CreateDisplayURL returned error: %v", err)
+	}
+	if result.SignedURL != "https://example.test/display" || storage.displayPath != "nomo-photos/users/"+testUserID+"/drink_logs/photo.jpg" {
+		t.Fatalf("result = %#v displayPath = %q", result, storage.displayPath)
+	}
+}
+
+func TestCreateDisplayURLRejectsInvalidPath(t *testing.T) {
+	usecase := NewUsecase(Dependencies{Storage: &fakeStorage{}})
+
+	_, err := usecase.CreateDisplayURL(context.Background(), DisplayURLRequest{
+		UserID: testUserID,
+		Path:   "../secret.jpg",
+	})
+	assertUserError(t, err, ErrorKindInvalidInput, "path is invalid")
 }
 
 func TestEscapedStoragePathKeepsFolderSeparators(t *testing.T) {

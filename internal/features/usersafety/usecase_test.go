@@ -15,6 +15,7 @@ const (
 type fakeRepository struct {
 	blocked UserRelation
 	hidden  HiddenDrinkLog
+	cleaned UserRelation
 }
 
 func (f *fakeRepository) BlockUser(_ context.Context, _ string, relation UserRelation) (map[string]any, error) {
@@ -31,6 +32,10 @@ func (f *fakeRepository) HideDrinkLog(_ context.Context, _ string, hidden Hidden
 	return map[string]any{"drink_log_id": hidden.DrinkLogID}, nil
 }
 func (f *fakeRepository) UnhideDrinkLog(context.Context, string, HiddenDrinkLog) error { return nil }
+func (f *fakeRepository) CleanupBlockedRelations(_ context.Context, relation UserRelation) error {
+	f.cleaned = relation
+	return nil
+}
 
 func TestBlockUserRejectsSelf(t *testing.T) {
 	usecase := NewUsecase(Dependencies{Repository: &fakeRepository{}})
@@ -49,6 +54,9 @@ func TestBlockUserCleansRelation(t *testing.T) {
 	}
 	if repo.blocked.ActorUserID != testUserID || repo.blocked.TargetUserID != otherUserID {
 		t.Fatalf("blocked = %#v", repo.blocked)
+	}
+	if repo.cleaned.ActorUserID != testUserID || repo.cleaned.TargetUserID != otherUserID {
+		t.Fatalf("cleaned = %#v", repo.cleaned)
 	}
 }
 

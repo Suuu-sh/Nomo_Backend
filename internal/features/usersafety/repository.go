@@ -9,4 +9,5 @@ type Repository interface {
 	UnmuteUser(ctx context.Context, authToken string, relation UserRelation) error
 	HideDrinkLog(ctx context.Context, authToken string, hidden HiddenDrinkLog) (map[string]any, error)
 	UnhideDrinkLog(ctx context.Context, authToken string, hidden HiddenDrinkLog) error
+	CleanupBlockedRelations(ctx context.Context, relation UserRelation) error
 }
