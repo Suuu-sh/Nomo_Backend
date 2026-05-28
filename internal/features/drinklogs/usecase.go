@@ -7,17 +7,21 @@ import (
 )
 
 type Dependencies struct {
-	Repository  Repository
-	Notifier    Notifier
-	Now         func() time.Time
-	RandomFloat func() float64
+	Repository   Repository
+	Publisher    EventPublisher
+	MediaCleaner MediaCleaner
+	Logger       Logger
+	Now          func() time.Time
+	RandomFloat  func() float64
 }
 
 type Usecase struct {
-	repository  Repository
-	notifier    Notifier
-	now         func() time.Time
-	randomFloat func() float64
+	repository   Repository
+	publisher    EventPublisher
+	mediaCleaner MediaCleaner
+	logger       Logger
+	now          func() time.Time
+	randomFloat  func() float64
 }
 
 func NewUsecase(deps Dependencies) *Usecase {
@@ -29,7 +33,7 @@ func NewUsecase(deps Dependencies) *Usecase {
 	if randomFloat == nil {
 		randomFloat = RandomFloat64
 	}
-	return &Usecase{repository: deps.Repository, notifier: deps.Notifier, now: now, randomFloat: randomFloat}
+	return &Usecase{repository: deps.Repository, publisher: deps.Publisher, mediaCleaner: deps.MediaCleaner, logger: deps.Logger, now: now, randomFloat: randomFloat}
 }
 
 type ListInput struct {
@@ -81,6 +85,11 @@ func (u *Usecase) ListDrinkLogs(ctx context.Context, input ListInput) ([]map[str
 	if err != nil {
 		return nil, err
 	}
+	hiddenUserIDs, err := u.repository.HiddenUserIDs(ctx, input.AuthToken, userID)
+	if err != nil {
+		return nil, err
+	}
+	visibleUserIDs = ExcludeHiddenUserIDs(visibleUserIDs, hiddenUserIDs)
 	rows, err := u.repository.ListDrinkLogs(ctx, input.AuthToken, visibleUserIDs)
 	if err != nil {
 		return nil, err
@@ -95,6 +104,7 @@ func (u *Usecase) ListDrinkLogs(ctx context.Context, input ListInput) ([]map[str
 	}
 	rows = AppendUniqueRows(rows, officialRows...)
 	rows = HideRowsByID(rows, hiddenIDs)
+	rows = HideRowsByOwner(rows, hiddenUserIDs)
 	AttachLikeState(rows, userID)
 	SortRowsByDrankAtDesc(rows)
 	return rows, nil
@@ -166,8 +176,10 @@ func (u *Usecase) CreateDrinkLog(ctx context.Context, input CreateInput) (map[st
 	if err := u.repository.CreateDrinkLogFriendLinks(ctx, input.AuthToken, logID, friendIDs); err != nil {
 		return nil, err
 	}
-	if u.notifier != nil {
-		u.notifier.DrinkLogTagged(ctx, input.AuthToken, logID, ownerUserID, friendIDs)
+	if u.publisher != nil {
+		if event, ok := NewDrinkLogTaggedEvent(logID, ownerUserID, friendIDs); ok {
+			u.publisher.Publish(ctx, input.AuthToken, event)
+		}
 	}
 	return row, nil
 }
@@ -188,6 +200,13 @@ func (u *Usecase) DeleteDrinkLog(ctx context.Context, input DeleteInput) (map[st
 	if row == nil {
 		return nil, UserError{Kind: ErrorKindNotFound, Message: "drink log not found"}
 	}
+	if u.mediaCleaner != nil {
+		if photoPath := strings.TrimSpace(stringValue(row, "photo_path")); photoPath != "" {
+			if err := u.mediaCleaner.DeleteDrinkLogPhoto(ctx, photoPath); err != nil && u.logger != nil {
+				u.logger.Warn("failed to delete drink log photo", "drink_log_id", logID, "photo_path", photoPath, "error", err)
+			}
+		}
+	}
 	return row, nil
 }
 
@@ -200,8 +219,10 @@ func (u *Usecase) LikeDrinkLog(ctx context.Context, input LikeInput) (LikeState,
 	if err != nil {
 		return LikeState{}, err
 	}
-	if created && u.notifier != nil {
-		u.notifier.DrinkLogLiked(ctx, input.AuthToken, logID, userID)
+	if created && u.publisher != nil {
+		if event, ok := NewDrinkLogLikedEvent(logID, userID); ok {
+			u.publisher.Publish(ctx, input.AuthToken, event)
+		}
 	}
 	return u.repository.LikeState(ctx, input.AuthToken, logID, userID)
 }
@@ -250,6 +271,11 @@ func (u *Usecase) ReportDrinkLog(ctx context.Context, input ReportInput) (Report
 	report := Report{DrinkLogID: logID, ReporterUserID: reporterUserID, Reason: reason, Status: ModerationStatusPending}
 	if err := u.repository.CreateReport(ctx, input.AuthToken, report); err != nil {
 		return ReportResult{}, err
+	}
+	if u.publisher != nil {
+		if event, ok := NewDrinkLogReportedEvent(logID, ownerUserID, reporterUserID, reason); ok {
+			u.publisher.Publish(ctx, input.AuthToken, event)
+		}
 	}
 	return ReportResult{Created: true, Body: NewReportBody(report, false)}, nil
 }

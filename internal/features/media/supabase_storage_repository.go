@@ -84,6 +84,35 @@ func (r *SupabaseStorageRepository) CreateSignedUploadURL(ctx context.Context, t
 	return UploadURL{Bucket: target.Bucket, Path: target.Path, Token: token, SignedURL: signedURL, ContentType: target.ContentType}, nil
 }
 
+func (r *SupabaseStorageRepository) DeleteObject(ctx context.Context, bucket, objectPath string) error {
+	if r.supabaseURL == "" || r.serviceRoleKey == "" {
+		return errors.New("supabase storage is not configured")
+	}
+	if strings.TrimSpace(bucket) == "" || strings.TrimSpace(objectPath) == "" {
+		return nil
+	}
+	endpoint := r.supabaseURL + "/storage/v1/object/" + escapedStoragePath(bucket, objectPath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.serviceRoleKey)
+	req.Header.Set("apikey", r.serviceRoleKey)
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("supabase storage object delete failed: status=%d body=%s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 func escapedStoragePath(bucket, objectPath string) string {
 	parts := append([]string{bucket}, strings.Split(objectPath, "/")...)
 	for i, part := range parts {

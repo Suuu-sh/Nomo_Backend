@@ -45,6 +45,9 @@ func (r *SupabaseRepository) VisibleFeedUserIDs(ctx context.Context, authToken, 
 }
 
 func (r *SupabaseRepository) ListDrinkLogs(ctx context.Context, authToken string, ownerUserIDs []string) ([]map[string]any, error) {
+	if len(ownerUserIDs) == 0 {
+		return []map[string]any{}, nil
+	}
 	q := url.Values{}
 	q.Set("select", drinkLogSelectColumns)
 	q.Set("owner_user_id", "in.("+strings.Join(ownerUserIDs, ",")+")")
@@ -200,6 +203,59 @@ func (r *SupabaseRepository) HiddenDrinkLogIDs(ctx context.Context, authToken, u
 			hidden[id] = true
 		}
 	}
+	q = url.Values{}
+	q.Set("select", "drink_log_id")
+	q.Set("user_id", "eq."+userID)
+	var feedHiddenRows []map[string]any
+	if err := r.client.Get(ctx, authToken, "feed_hidden_drink_logs", q, &feedHiddenRows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return hidden, nil
+		}
+		return nil, err
+	}
+	for _, row := range feedHiddenRows {
+		id, _ := row["drink_log_id"].(string)
+		if id != "" {
+			hidden[id] = true
+		}
+	}
+	return hidden, nil
+}
+
+func (r *SupabaseRepository) HiddenUserIDs(ctx context.Context, authToken, userID string) (map[string]bool, error) {
+	hidden := map[string]bool{}
+	q := url.Values{}
+	q.Set("select", "blocked_user_id")
+	q.Set("blocker_user_id", "eq."+userID)
+	var blockRows []map[string]any
+	if err := r.client.Get(ctx, authToken, "user_blocks", q, &blockRows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return hidden, nil
+		}
+		return nil, err
+	}
+	for _, row := range blockRows {
+		id, _ := row["blocked_user_id"].(string)
+		if id != "" {
+			hidden[id] = true
+		}
+	}
+	q = url.Values{}
+	q.Set("select", "muted_user_id")
+	q.Set("muter_user_id", "eq."+userID)
+	var muteRows []map[string]any
+	if err := r.client.Get(ctx, authToken, "user_mutes", q, &muteRows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return hidden, nil
+		}
+		return nil, err
+	}
+	for _, row := range muteRows {
+		id, _ := row["muted_user_id"].(string)
+		if id != "" {
+			hidden[id] = true
+		}
+	}
 	return hidden, nil
 }
 
@@ -256,6 +312,20 @@ func (r *SupabaseRepository) CreateReport(ctx context.Context, authToken string,
 	return nil
 }
 
+func isOptionalSafetyTableMissing(err error) bool {
+	var apiErr supabase.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Body, "does not exist") {
+		return true
+	}
+	return false
+}
+
 func stringValue(row map[string]any, key string) string {
 	value, _ := row[key].(string)
 	return value
@@ -272,6 +342,36 @@ func HideRowsByID(rows []map[string]any, hiddenIDs map[string]bool) []map[string
 			continue
 		}
 		filtered = append(filtered, row)
+	}
+	return filtered
+}
+
+func HideRowsByOwner(rows []map[string]any, hiddenUserIDs map[string]bool) []map[string]any {
+	if len(hiddenUserIDs) == 0 {
+		return rows
+	}
+	filtered := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		ownerUserID, _ := row["owner_user_id"].(string)
+		isOfficial, _ := row["is_official"].(bool)
+		if ownerUserID != "" && hiddenUserIDs[ownerUserID] && !isOfficial {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	return filtered
+}
+
+func ExcludeHiddenUserIDs(userIDs []string, hiddenUserIDs map[string]bool) []string {
+	if len(hiddenUserIDs) == 0 {
+		return userIDs
+	}
+	filtered := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		if id != "" && hiddenUserIDs[id] {
+			continue
+		}
+		filtered = append(filtered, id)
 	}
 	return filtered
 }

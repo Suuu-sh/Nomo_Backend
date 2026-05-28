@@ -2,6 +2,8 @@ package homefeed
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -55,7 +57,74 @@ func (r *SupabaseRepository) HiddenDrinkLogIDs(ctx context.Context, authToken, u
 			hidden[id] = true
 		}
 	}
+	q = url.Values{}
+	q.Set("select", "drink_log_id")
+	q.Set("user_id", "eq."+userID)
+	var feedHiddenRows []map[string]any
+	if err := r.client.Get(ctx, authToken, "feed_hidden_drink_logs", q, &feedHiddenRows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return hidden, nil
+		}
+		return nil, err
+	}
+	for _, row := range feedHiddenRows {
+		id, _ := row["drink_log_id"].(string)
+		if id != "" {
+			hidden[id] = true
+		}
+	}
 	return hidden, nil
+}
+
+func (r *SupabaseRepository) HiddenUserIDs(ctx context.Context, authToken, userID string) (map[string]bool, error) {
+	hidden := map[string]bool{}
+	q := url.Values{}
+	q.Set("select", "blocked_user_id")
+	q.Set("blocker_user_id", "eq."+userID)
+	var blockRows []map[string]any
+	if err := r.client.Get(ctx, authToken, "user_blocks", q, &blockRows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return hidden, nil
+		}
+		return nil, err
+	}
+	for _, row := range blockRows {
+		id, _ := row["blocked_user_id"].(string)
+		if id != "" {
+			hidden[id] = true
+		}
+	}
+	q = url.Values{}
+	q.Set("select", "muted_user_id")
+	q.Set("muter_user_id", "eq."+userID)
+	var muteRows []map[string]any
+	if err := r.client.Get(ctx, authToken, "user_mutes", q, &muteRows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return hidden, nil
+		}
+		return nil, err
+	}
+	for _, row := range muteRows {
+		id, _ := row["muted_user_id"].(string)
+		if id != "" {
+			hidden[id] = true
+		}
+	}
+	return hidden, nil
+}
+
+func isOptionalSafetyTableMissing(err error) bool {
+	var apiErr supabase.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Body, "does not exist") {
+		return true
+	}
+	return false
 }
 
 func (r *SupabaseRepository) ListDrinkLogs(ctx context.Context, authToken string, ownerUserIDs []string) ([]map[string]any, error) {

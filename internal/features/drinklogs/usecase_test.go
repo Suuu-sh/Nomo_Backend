@@ -27,6 +27,7 @@ type fakeRepository struct {
 	likeCreated    bool
 	likeState      LikeState
 	hiddenIDs      map[string]bool
+	hiddenUserIDs  map[string]bool
 	report         *Report
 	reportOwnerID  string
 	createdReport  Report
@@ -109,6 +110,14 @@ func (f *fakeRepository) HiddenDrinkLogIDs(context.Context, string, string) (map
 	return map[string]bool{}, nil
 }
 
+func (f *fakeRepository) HiddenUserIDs(context.Context, string, string) (map[string]bool, error) {
+	f.calls = append(f.calls, "hidden_users")
+	if f.hiddenUserIDs != nil {
+		return f.hiddenUserIDs, nil
+	}
+	return map[string]bool{}, nil
+}
+
 func (f *fakeRepository) DrinkLogOwnerUserID(context.Context, string, string) (string, error) {
 	f.calls = append(f.calls, "log_owner")
 	return f.reportOwnerID, nil
@@ -125,17 +134,21 @@ func (f *fakeRepository) CreateReport(_ context.Context, _ string, report Report
 	return nil
 }
 
-type fakeNotifier struct {
-	tagged int
-	liked  int
+type fakePublisher struct {
+	events []DomainEvent
 }
 
-func (f *fakeNotifier) DrinkLogTagged(context.Context, string, string, string, []string) {
-	f.tagged++
+func (f *fakePublisher) Publish(_ context.Context, _ string, event DomainEvent) {
+	f.events = append(f.events, event)
 }
 
-func (f *fakeNotifier) DrinkLogLiked(context.Context, string, string, string) {
-	f.liked++
+type fakeMediaCleaner struct {
+	deletedPath string
+}
+
+func (f *fakeMediaCleaner) DeleteDrinkLogPhoto(_ context.Context, photoPath string) error {
+	f.deletedPath = photoPath
+	return nil
 }
 
 func TestCreateDrinkLogRejectsNonFriendTagBeforeInsert(t *testing.T) {
@@ -192,10 +205,10 @@ func TestCreateDrinkLogRejectsInvalidPhotoPath(t *testing.T) {
 
 func TestCreateDrinkLogAssignsRarityOnBackendAndIgnoresClientRarity(t *testing.T) {
 	repo := &fakeRepository{}
-	notifier := &fakeNotifier{}
+	publisher := &fakePublisher{}
 	usecase := NewUsecase(Dependencies{
 		Repository:  repo,
-		Notifier:    notifier,
+		Publisher:   publisher,
 		RandomFloat: func() float64 { return 0.005 },
 	})
 
@@ -221,8 +234,8 @@ func TestCreateDrinkLogAssignsRarityOnBackendAndIgnoresClientRarity(t *testing.T
 	if !reflect.DeepEqual(repo.links, []string{otherUserID}) {
 		t.Fatalf("links = %v, want deduplicated friend id", repo.links)
 	}
-	if notifier.tagged != 1 {
-		t.Fatalf("tagged notifications = %d, want 1", notifier.tagged)
+	if len(publisher.events) != 1 || publisher.events[0].Kind != EventDrinkLogTagged {
+		t.Fatalf("events = %#v, want drink log tagged", publisher.events)
 	}
 }
 
@@ -253,8 +266,8 @@ func TestLikeDrinkLogNotifiesOnlyWhenLikeCreated(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &fakeRepository{likeCreated: tc.created, likeState: LikeState{LikeCount: 2, LikedByMe: true}}
-			notifier := &fakeNotifier{}
-			usecase := NewUsecase(Dependencies{Repository: repo, Notifier: notifier})
+			publisher := &fakePublisher{}
+			usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 			state, err := usecase.LikeDrinkLog(context.Background(), LikeInput{AuthToken: testAuthToken, LogID: testLogID, UserID: testUserID})
 			if err != nil {
@@ -263,16 +276,37 @@ func TestLikeDrinkLogNotifiesOnlyWhenLikeCreated(t *testing.T) {
 			if state.LikeCount != 2 || !state.LikedByMe {
 				t.Fatalf("state = %#v", state)
 			}
-			if notifier.liked != tc.wantNotified {
-				t.Fatalf("liked notifications = %d, want %d", notifier.liked, tc.wantNotified)
+			if len(publisher.events) != tc.wantNotified {
+				t.Fatalf("events = %#v, want %d", publisher.events, tc.wantNotified)
+			}
+			if tc.wantNotified == 1 && publisher.events[0].Kind != EventDrinkLogLiked {
+				t.Fatalf("event = %#v, want drink log liked", publisher.events[0])
 			}
 		})
 	}
 }
 
+func TestDeleteDrinkLogCleansUpPhoto(t *testing.T) {
+	repo := &fakeRepository{deletedLog: map[string]any{"id": testLogID, "photo_path": "users/" + testUserID + "/drink_logs/photo.jpg"}}
+	cleaner := &fakeMediaCleaner{}
+	usecase := NewUsecase(Dependencies{Repository: repo, MediaCleaner: cleaner})
+
+	row, err := usecase.DeleteDrinkLog(context.Background(), DeleteInput{AuthToken: testAuthToken, LogID: testLogID, OwnerUserID: testUserID})
+	if err != nil {
+		t.Fatalf("DeleteDrinkLog returned error: %v", err)
+	}
+	if row["id"] != testLogID {
+		t.Fatalf("row = %#v", row)
+	}
+	if cleaner.deletedPath != "users/"+testUserID+"/drink_logs/photo.jpg" {
+		t.Fatalf("deleted path = %q", cleaner.deletedPath)
+	}
+}
+
 func TestReportDrinkLogCreatesModerationReportAndHidesPost(t *testing.T) {
 	repo := &fakeRepository{reportOwnerID: otherUserID}
-	usecase := NewUsecase(Dependencies{Repository: repo})
+	publisher := &fakePublisher{}
+	usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 	result, err := usecase.ReportDrinkLog(context.Background(), ReportInput{
 		AuthToken:      testAuthToken,
@@ -291,6 +325,9 @@ func TestReportDrinkLogCreatesModerationReportAndHidesPost(t *testing.T) {
 	}
 	if want := []string{"log_owner", "find_report", "create_report"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("calls = %v, want %v", repo.calls, want)
+	}
+	if len(publisher.events) != 1 || publisher.events[0].Kind != EventDrinkLogReported {
+		t.Fatalf("events = %#v, want drink log reported", publisher.events)
 	}
 }
 

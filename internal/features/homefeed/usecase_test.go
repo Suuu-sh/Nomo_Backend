@@ -14,6 +14,7 @@ const (
 type fakeRepository struct {
 	visibleUserIDs []string
 	hiddenIDs      map[string]bool
+	hiddenUserIDs  map[string]bool
 	logs           []map[string]any
 	officialLogs   []map[string]any
 }
@@ -28,6 +29,13 @@ func (f *fakeRepository) VisibleFeedUserIDs(context.Context, string, string) ([]
 func (f *fakeRepository) HiddenDrinkLogIDs(context.Context, string, string) (map[string]bool, error) {
 	if f.hiddenIDs != nil {
 		return f.hiddenIDs, nil
+	}
+	return map[string]bool{}, nil
+}
+
+func (f *fakeRepository) HiddenUserIDs(context.Context, string, string) (map[string]bool, error) {
+	if f.hiddenUserIDs != nil {
+		return f.hiddenUserIDs, nil
 	}
 	return map[string]bool{}, nil
 }

@@ -2,7 +2,10 @@ package drinkinvites
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/yota/nomo/backend/internal/supabase"
@@ -77,6 +80,21 @@ func (r *SupabaseRepository) DailyStatus(ctx context.Context, authToken, userID,
 	return status, nil
 }
 
+func (r *SupabaseRepository) BlockExistsBetweenUsers(ctx context.Context, authToken, fromUserID, toUserID string) (bool, error) {
+	q := url.Values{}
+	q.Set("select", "blocker_user_id")
+	q.Set("or", "(and(blocker_user_id.eq."+fromUserID+",blocked_user_id.eq."+toUserID+"),and(blocker_user_id.eq."+toUserID+",blocked_user_id.eq."+fromUserID+"))")
+	q.Set("limit", "1")
+	var rows []map[string]any
+	if err := r.client.Get(ctx, authToken, "user_blocks", q, &rows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(rows) > 0, nil
+}
+
 func (r *SupabaseRepository) FindActiveInviteBetweenUsersForDate(ctx context.Context, authToken, fromUserID, toUserID, inviteDate string) (*ExistingInvite, error) {
 	q := url.Values{}
 	q.Set("select", "id,status")
@@ -127,6 +145,20 @@ func (r *SupabaseRepository) UpdatePendingInviteStatus(ctx context.Context, auth
 		return nil, nil
 	}
 	return rows[0], nil
+}
+
+func isOptionalSafetyTableMissing(err error) bool {
+	var apiErr supabase.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Body, "does not exist") {
+		return true
+	}
+	return false
 }
 
 func firstMap(rows []map[string]any, fallback map[string]any) map[string]any {

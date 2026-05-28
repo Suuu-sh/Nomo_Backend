@@ -278,3 +278,49 @@ type ReportResult struct {
 	Created bool
 	Body    map[string]any
 }
+
+type DomainEventKind string
+
+const (
+	EventDrinkLogTagged   DomainEventKind = "drink_log.tagged"
+	EventDrinkLogLiked    DomainEventKind = "drink_log.liked"
+	EventDrinkLogReported DomainEventKind = "drink_log.reported"
+)
+
+type DomainEvent struct {
+	Kind             DomainEventKind
+	LogID            string
+	OwnerUserID      string
+	ActorUserID      string
+	FriendIDs        []string
+	ReportReason     ReportReason
+	ModerationStatus ModerationStatus
+}
+
+func NewDrinkLogTaggedEvent(logID, ownerUserID string, friendIDs []string) (DomainEvent, bool) {
+	if logID == "" || ownerUserID == "" || len(friendIDs) == 0 {
+		return DomainEvent{}, false
+	}
+	return DomainEvent{Kind: EventDrinkLogTagged, LogID: logID, OwnerUserID: ownerUserID, ActorUserID: ownerUserID, FriendIDs: append([]string(nil), friendIDs...)}, true
+}
+
+func NewDrinkLogLikedEvent(logID, actorUserID string) (DomainEvent, bool) {
+	if logID == "" || actorUserID == "" {
+		return DomainEvent{}, false
+	}
+	return DomainEvent{Kind: EventDrinkLogLiked, LogID: logID, ActorUserID: actorUserID}, true
+}
+
+func NewDrinkLogReportedEvent(logID, ownerUserID, reporterUserID string, reason ReportReason) (DomainEvent, bool) {
+	if logID == "" || ownerUserID == "" || reporterUserID == "" || ownerUserID == reporterUserID {
+		return DomainEvent{}, false
+	}
+	return DomainEvent{
+		Kind:             EventDrinkLogReported,
+		LogID:            logID,
+		OwnerUserID:      ownerUserID,
+		ActorUserID:      reporterUserID,
+		ReportReason:     reason,
+		ModerationStatus: ModerationStatusPending,
+	}, true
+}

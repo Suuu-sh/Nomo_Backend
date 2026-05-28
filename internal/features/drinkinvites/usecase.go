@@ -73,6 +73,13 @@ func (u *Usecase) CreateDrinkInvite(ctx context.Context, input CreateInput) (map
 	if err != nil {
 		return nil, err
 	}
+	blocked, err := u.repository.BlockExistsBetweenUsers(ctx, input.AuthToken, fromUserID, toUserID)
+	if err != nil {
+		return nil, err
+	}
+	if blocked {
+		return nil, UserError{Kind: ErrorKindConflict, Message: "blocked users cannot be invited"}
+	}
 
 	dailyStatus, err := u.repository.DailyStatus(ctx, input.AuthToken, toUserID, inviteDate)
 	if err != nil {

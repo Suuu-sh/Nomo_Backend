@@ -27,10 +27,20 @@ func NewUsecase(deps Dependencies) *Usecase {
 type ListInput struct {
 	AuthToken string
 	UserID    string
+	Limit     string
+	Cursor    string
 }
 
 func (u *Usecase) ListHomeFeed(ctx context.Context, input ListInput) ([]map[string]any, error) {
 	userID, err := CleanUUID(input.UserID, "user id")
+	if err != nil {
+		return nil, err
+	}
+	limit, err := CleanLimit(input.Limit, 50, 100)
+	if err != nil {
+		return nil, err
+	}
+	cursor, err := CleanCursor(input.Cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +52,11 @@ func (u *Usecase) ListHomeFeed(ctx context.Context, input ListInput) ([]map[stri
 	if err != nil {
 		return nil, err
 	}
+	hiddenUserIDs, err := u.repository.HiddenUserIDs(ctx, input.AuthToken, userID)
+	if err != nil {
+		return nil, err
+	}
+	visibleUserIDs = ExcludeHiddenUserIDs(visibleUserIDs, hiddenUserIDs)
 	rows, err := u.repository.ListDrinkLogs(ctx, input.AuthToken, visibleUserIDs)
 	if err != nil {
 		return nil, err
@@ -53,6 +68,7 @@ func (u *Usecase) ListHomeFeed(ctx context.Context, input ListInput) ([]map[stri
 	rows = appendUniqueRows(rows, officialRows...)
 	attachLikeState(rows, userID)
 	rows = HideReportedRows(rows, hiddenIDs)
+	rows = HideRowsByOwner(rows, hiddenUserIDs)
 	items := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		item, ok := BuildFeedItem(row, userID)
@@ -62,9 +78,49 @@ func (u *Usecase) ListHomeFeed(ctx context.Context, input ListInput) ([]map[stri
 		items = append(items, AttachFeedItem(row, item))
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		return RowTime(items[i]).After(RowTime(items[j]))
+		iScore := int64Value(items[i], "rank_score")
+		jScore := int64Value(items[j], "rank_score")
+		if iScore != jScore {
+			return iScore > jScore
+		}
+		if !RowTime(items[i]).Equal(RowTime(items[j])) {
+			return RowTime(items[i]).After(RowTime(items[j]))
+		}
+		return stringValue(items[i], "id") < stringValue(items[j], "id")
 	})
+	items = applyCursor(items, cursor)
+	if len(items) > limit {
+		items = items[:limit]
+	}
 	return items, nil
+}
+
+func applyCursor(items []map[string]any, cursor string) []map[string]any {
+	if cursor == "" || len(items) == 0 {
+		return items
+	}
+	parsed, ok := ParseCursor(cursor)
+	if !ok {
+		return items
+	}
+	if !parsed.SortAt.IsZero() {
+		filtered := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			if RowTime(item).Before(parsed.SortAt) {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered
+	}
+	filtered := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		score := int64Value(item, "rank_score")
+		id := stringValue(item, "id")
+		if score < parsed.RankScore || (score == parsed.RankScore && id > parsed.ID) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func appendUniqueRows(rows []map[string]any, extraRows ...map[string]any) []map[string]any {
@@ -100,5 +156,22 @@ func attachLikeState(rows []map[string]any, userID string) {
 			}
 		}
 		row["liked_by_me"] = likedByMe
+	}
+}
+
+func int64Value(row map[string]any, key string) int64 {
+	switch v := row[key].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case float32:
+		return int64(v)
+	default:
+		return 0
 	}
 }

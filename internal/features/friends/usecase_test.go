@@ -18,6 +18,7 @@ type fakeRepository struct {
 	calls          []string
 	friendships    []map[string]any
 	alreadyFriend  bool
+	blocked        bool
 	pendingRequest map[string]any
 	createdRequest map[string]any
 	updatedRequest map[string]any
@@ -62,6 +63,11 @@ func (f *fakeRepository) FriendshipExists(context.Context, string, string, strin
 	return f.alreadyFriend, nil
 }
 
+func (f *fakeRepository) BlockExistsBetweenUsers(context.Context, string, string, string) (bool, error) {
+	f.calls = append(f.calls, "block")
+	return f.blocked, nil
+}
+
 func (f *fakeRepository) PendingFriendRequestBetween(context.Context, string, string, string) (map[string]any, error) {
 	f.calls = append(f.calls, "pending")
 	return f.pendingRequest, nil
@@ -80,17 +86,12 @@ func (f *fakeRepository) UpdatePendingFriendRequestStatus(context.Context, strin
 	return f.updatedRequest, nil
 }
 
-type fakeNotifier struct {
-	received int
-	accepted int
+type fakePublisher struct {
+	events []DomainEvent
 }
 
-func (f *fakeNotifier) FriendRequestReceived(context.Context, string, map[string]any) {
-	f.received++
-}
-
-func (f *fakeNotifier) FriendRequestAccepted(context.Context, string, map[string]any) {
-	f.accepted++
+func (f *fakePublisher) Publish(_ context.Context, _ string, event DomainEvent) {
+	f.events = append(f.events, event)
 }
 
 func TestListFriendsAttachesStatusAndStats(t *testing.T) {
@@ -134,15 +135,15 @@ func TestCreateFriendRequestRejectsExistingFriendBeforeInsert(t *testing.T) {
 
 	_, err := usecase.CreateFriendRequest(context.Background(), CreateFriendRequestInput{AuthToken: testAuthToken, FromUserID: testUserID, ToUserID: otherUserID})
 	assertUserError(t, err, ErrorKindConflict, "already friends")
-	if want := []string{"exists"}; !reflect.DeepEqual(repo.calls, want) {
+	if want := []string{"block", "exists"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("calls = %v, want %v", repo.calls, want)
 	}
 }
 
 func TestCreateFriendRequestCreatesNotification(t *testing.T) {
 	repo := &fakeRepository{}
-	notifier := &fakeNotifier{}
-	usecase := NewUsecase(Dependencies{Repository: repo, Notifier: notifier})
+	publisher := &fakePublisher{}
+	usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 	row, err := usecase.CreateFriendRequest(context.Background(), CreateFriendRequestInput{AuthToken: testAuthToken, FromUserID: testUserID, ToUserID: otherUserID})
 	if err != nil {
@@ -151,15 +152,15 @@ func TestCreateFriendRequestCreatesNotification(t *testing.T) {
 	if row["id"] != testRequestID {
 		t.Fatalf("row = %#v", row)
 	}
-	if notifier.received != 1 {
-		t.Fatalf("received notifications = %d, want 1", notifier.received)
+	if len(publisher.events) != 1 || publisher.events[0].Kind != EventFriendRequestCreated {
+		t.Fatalf("events = %#v, want friend request created", publisher.events)
 	}
 }
 
 func TestUpdateFriendRequestAcceptedCreatesFriendshipAndNotification(t *testing.T) {
 	repo := &fakeRepository{updatedRequest: map[string]any{"id": testRequestID, "from_user_id": otherUserID, "to_user_id": testUserID, "status": "accepted"}}
-	notifier := &fakeNotifier{}
-	usecase := NewUsecase(Dependencies{Repository: repo, Notifier: notifier})
+	publisher := &fakePublisher{}
+	usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 	row, err := usecase.UpdateFriendRequest(context.Background(), UpdateFriendRequestInput{AuthToken: testAuthToken, RequestID: testRequestID, UserID: testUserID, Status: "accepted"})
 	if err != nil {
@@ -171,8 +172,8 @@ func TestUpdateFriendRequestAcceptedCreatesFriendshipAndNotification(t *testing.
 	if want := []string{"update_request", "upsert"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("calls = %v, want %v", repo.calls, want)
 	}
-	if notifier.accepted != 1 {
-		t.Fatalf("accepted notifications = %d, want 1", notifier.accepted)
+	if len(publisher.events) != 1 || publisher.events[0].Kind != EventFriendRequestAccepted {
+		t.Fatalf("events = %#v, want friend request accepted", publisher.events)
 	}
 }
 

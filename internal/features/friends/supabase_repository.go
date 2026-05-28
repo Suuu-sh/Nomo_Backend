@@ -2,6 +2,8 @@ package friends
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -218,6 +220,21 @@ func (r *SupabaseRepository) FriendshipExists(ctx context.Context, authToken, us
 	return len(rows) > 0, nil
 }
 
+func (r *SupabaseRepository) BlockExistsBetweenUsers(ctx context.Context, authToken, userID, friendID string) (bool, error) {
+	q := url.Values{}
+	q.Set("select", "blocker_user_id")
+	q.Set("or", "(and(blocker_user_id.eq."+userID+",blocked_user_id.eq."+friendID+"),and(blocker_user_id.eq."+friendID+",blocked_user_id.eq."+userID+"))")
+	q.Set("limit", "1")
+	var rows []map[string]any
+	if err := r.client.Get(ctx, authToken, "user_blocks", q, &rows); err != nil {
+		if isOptionalSafetyTableMissing(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(rows) > 0, nil
+}
+
 func (r *SupabaseRepository) PendingFriendRequestBetween(ctx context.Context, authToken, userID, friendID string) (map[string]any, error) {
 	q := url.Values{}
 	q.Set("select", "id,from_user_id,to_user_id")
@@ -258,6 +275,20 @@ func (r *SupabaseRepository) UpdatePendingFriendRequestStatus(ctx context.Contex
 		return nil, err
 	}
 	return firstMap(rows), nil
+}
+
+func isOptionalSafetyTableMissing(err error) bool {
+	var apiErr supabase.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Body, "does not exist") {
+		return true
+	}
+	return false
 }
 
 func firstMap(rows []map[string]any) map[string]any {

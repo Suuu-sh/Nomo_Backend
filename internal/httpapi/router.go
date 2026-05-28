@@ -5,10 +5,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/yota/nomo/backend/internal/config"
+	"github.com/yota/nomo/backend/internal/features/dailystatuses"
 	"github.com/yota/nomo/backend/internal/features/drinklogs"
 	"github.com/yota/nomo/backend/internal/features/friends"
 	"github.com/yota/nomo/backend/internal/features/profiles"
@@ -55,12 +55,19 @@ func (r *router) routes() {
 	r.mux.HandleFunc("PUT /v1/drink-logs/{id}/like", r.auth(r.likeDrinkLog))
 	r.mux.HandleFunc("DELETE /v1/drink-logs/{id}/like", r.auth(r.unlikeDrinkLog))
 	r.mux.HandleFunc("POST /v1/drink-logs/{id}/report", r.auth(r.reportDrinkLog))
+	r.mux.HandleFunc("POST /v1/user-blocks", r.auth(r.blockUser))
+	r.mux.HandleFunc("DELETE /v1/user-blocks/{id}", r.auth(r.unblockUser))
+	r.mux.HandleFunc("POST /v1/user-mutes", r.auth(r.muteUser))
+	r.mux.HandleFunc("DELETE /v1/user-mutes/{id}", r.auth(r.unmuteUser))
+	r.mux.HandleFunc("POST /v1/feed-hidden-drink-logs", r.auth(r.hideDrinkLogFromFeed))
+	r.mux.HandleFunc("DELETE /v1/feed-hidden-drink-logs/{id}", r.auth(r.unhideDrinkLogFromFeed))
 	r.mux.HandleFunc("POST /v1/media/upload-url", r.auth(r.createMediaUploadURL))
 	r.mux.HandleFunc("GET /v1/notifications", r.auth(r.listNotifications))
 	r.mux.HandleFunc("PATCH /v1/notifications/read-all", r.auth(r.markNotificationsRead))
 	r.mux.HandleFunc("PUT /v1/me/push-token", r.auth(r.registerPushToken))
 	r.mux.HandleFunc("GET /v1/daily-status", r.auth(r.getDailyStatus))
 	r.mux.HandleFunc("PUT /v1/daily-status", r.auth(r.upsertDailyStatus))
+	r.mux.HandleFunc("GET /v1/daily-statuses/month", r.auth(r.listMonthlyDailyStatuses))
 	r.mux.HandleFunc("GET /v1/drink-invites/today-reservations", r.auth(r.listTodayReservations))
 	r.mux.HandleFunc("GET /v1/drink-invites/incoming-pending", r.auth(r.listIncomingPendingInvites))
 	r.mux.HandleFunc("GET /v1/drink-invites/outgoing-active", r.auth(r.listOutgoingActiveInvites))
@@ -219,18 +226,13 @@ func (r *router) deleteDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 }
 
 func (r *router) getDailyStatus(w http.ResponseWriter, req *http.Request, authToken string) {
-	date, errMessage := cleanDateOnlyOrToday(req.URL.Query().Get("date"), "date")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
-		return
-	}
-	q := url.Values{}
-	q.Set("select", "user_id,status_date,status,updated_at")
-	q.Set("user_id", "eq."+req.Header.Get("X-Nomo-User-ID"))
-	q.Set("status_date", "eq."+date)
-	var rows []map[string]any
-	if err := r.deps.Supabase.Get(req.Context(), authToken, "daily_statuses", q, &rows); err != nil {
-		writeSupabaseError(w, err)
+	rows, err := r.dailyStatusUsecase().GetDailyStatus(req.Context(), dailystatuses.GetInput{
+		AuthToken: authToken,
+		UserID:    req.Header.Get("X-Nomo-User-ID"),
+		Date:      req.URL.Query().Get("date"),
+	})
+	if err != nil {
+		writeDailyStatusError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
@@ -241,22 +243,27 @@ func (r *router) upsertDailyStatus(w http.ResponseWriter, req *http.Request, aut
 	if !decodeJSONBody(w, req, &input) {
 		return
 	}
-	statusDate, errMessage := cleanDateOnlyOrToday(input.StatusDate, "status_date")
-	if errMessage != "" {
-		writeError(w, http.StatusBadRequest, errMessage)
+	rows, err := r.dailyStatusUsecase().UpsertDailyStatus(req.Context(), dailystatuses.UpsertInput{
+		AuthToken:  authToken,
+		UserID:     req.Header.Get("X-Nomo-User-ID"),
+		StatusDate: input.StatusDate,
+		Status:     input.Status,
+	})
+	if err != nil {
+		writeDailyStatusError(w, err)
 		return
 	}
-	input.Status = strings.TrimSpace(input.Status)
-	if !isValidDailyStatus(input.Status) {
-		writeError(w, http.StatusBadRequest, "status is invalid")
-		return
-	}
-	q := url.Values{}
-	q.Set("on_conflict", "user_id,status_date")
-	payload := map[string]any{"user_id": req.Header.Get("X-Nomo-User-ID"), "status_date": statusDate, "status": input.Status}
-	var rows []map[string]any
-	if err := r.deps.Supabase.Upsert(req.Context(), authToken, "daily_statuses", q, payload, &rows); err != nil {
-		writeSupabaseError(w, err)
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (r *router) listMonthlyDailyStatuses(w http.ResponseWriter, req *http.Request, authToken string) {
+	rows, err := r.dailyStatusUsecase().ListMonthlyStatuses(req.Context(), dailystatuses.MonthInput{
+		AuthToken: authToken,
+		UserID:    req.Header.Get("X-Nomo-User-ID"),
+		Month:     req.URL.Query().Get("month"),
+	})
+	if err != nil {
+		writeDailyStatusError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)

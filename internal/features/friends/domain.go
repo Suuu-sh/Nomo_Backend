@@ -90,6 +90,44 @@ func FriendRequestFromRow(row map[string]any) FriendRequest {
 	return FriendRequest{ID: id, FromUserID: fromUserID, ToUserID: toUserID, Status: status}
 }
 
+type DomainEventKind string
+
+const (
+	EventFriendRequestCreated  DomainEventKind = "friend_request.created"
+	EventFriendRequestAccepted DomainEventKind = "friend_request.accepted"
+)
+
+type DomainEvent struct {
+	Kind    DomainEventKind
+	Request FriendRequest
+}
+
+func NewFriendRequestCreatedEvent(row map[string]any) (DomainEvent, bool) {
+	request := FriendRequestFromRow(row)
+	if request.ID == "" || request.FromUserID == "" || request.ToUserID == "" || request.FromUserID == request.ToUserID {
+		return DomainEvent{}, false
+	}
+	return DomainEvent{Kind: EventFriendRequestCreated, Request: request}, true
+}
+
+func NewFriendRequestAcceptedEvent(row map[string]any) (DomainEvent, bool) {
+	request := FriendRequestFromRow(row)
+	if request.ID == "" || request.FromUserID == "" || request.ToUserID == "" || request.FromUserID == request.ToUserID {
+		return DomainEvent{}, false
+	}
+	request.Status = string(RequestStatusAccepted)
+	return DomainEvent{Kind: EventFriendRequestAccepted, Request: request}, true
+}
+
+func (e DomainEvent) RequestRow() map[string]any {
+	return map[string]any{
+		"id":           e.Request.ID,
+		"from_user_id": e.Request.FromUserID,
+		"to_user_id":   e.Request.ToUserID,
+		"status":       e.Request.Status,
+	}
+}
+
 type DrinkStats struct {
 	Count       int
 	LastDrinkAt time.Time

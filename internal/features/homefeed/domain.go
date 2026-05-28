@@ -2,8 +2,10 @@ package homefeed
 
 import (
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -62,6 +64,7 @@ type FeedItem struct {
 	CanReport   bool           `json:"can_report"`
 	CanDelete   bool           `json:"can_delete"`
 	SortAt      string         `json:"sort_at"`
+	RankScore   int64          `json:"rank_score"`
 	AccentSeed  int            `json:"accent_seed"`
 	Tilt        float64        `json:"tilt"`
 	Prop        string         `json:"prop"`
@@ -114,6 +117,7 @@ func BuildFeedItem(row map[string]any, currentUserID string) (FeedItem, bool) {
 		CanReport:   id != "" && !ownedByMe && !isOfficial,
 		CanDelete:   id != "" && ownedByMe && !isOfficial,
 		SortAt:      sortAt,
+		RankScore:   RankScore(row, currentUserID),
 		AccentSeed:  accentSeed(id),
 		Tilt:        tiltForID(id),
 		Prop:        "beer",
@@ -136,6 +140,9 @@ func AttachFeedItem(row map[string]any, item FeedItem) map[string]any {
 	row["feed_owned_by_me"] = item.OwnedByMe
 	row["feed_can_report"] = item.CanReport
 	row["feed_can_delete"] = item.CanDelete
+	row["rank_score"] = item.RankScore
+	row["feed_rank_score"] = item.RankScore
+	row["feed_cursor"] = EncodeCursor(item)
 	row["feed_accent_seed"] = item.AccentSeed
 	row["feed_tilt"] = item.Tilt
 	row["feed_prop"] = item.Prop
@@ -154,6 +161,110 @@ func HideReportedRows(rows []map[string]any, hiddenDrinkLogIDs map[string]bool) 
 		filtered = append(filtered, row)
 	}
 	return filtered
+}
+
+func HideRowsByOwner(rows []map[string]any, hiddenUserIDs map[string]bool) []map[string]any {
+	if len(hiddenUserIDs) == 0 {
+		return rows
+	}
+	filtered := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		ownerUserID := stringValue(row, "owner_user_id")
+		if ownerUserID != "" && hiddenUserIDs[ownerUserID] && !boolValue(row, "is_official") {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	return filtered
+}
+
+func ExcludeHiddenUserIDs(userIDs []string, hiddenUserIDs map[string]bool) []string {
+	if len(hiddenUserIDs) == 0 {
+		return userIDs
+	}
+	filtered := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		if id != "" && hiddenUserIDs[id] {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	return filtered
+}
+
+func CleanLimit(value string, defaultLimit, maxLimit int) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return defaultLimit, nil
+	}
+	limit, err := strconv.Atoi(trimmed)
+	if err != nil || limit <= 0 {
+		return 0, UserError{Kind: ErrorKindInvalidInput, Message: "limit must be a positive integer"}
+	}
+	if maxLimit > 0 && limit > maxLimit {
+		return maxLimit, nil
+	}
+	return limit, nil
+}
+
+func CleanCursor(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if len(trimmed) > 160 {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "cursor is invalid"}
+	}
+	return trimmed, nil
+}
+
+func RankScore(row map[string]any, currentUserID string) int64 {
+	score := RowTime(row).Unix()
+	if RowTime(row).IsZero() {
+		score = 0
+	}
+	ownerUserID := stringValue(row, "owner_user_id")
+	switch {
+	case boolValue(row, "is_official"):
+		score += 300
+	case ownerUserID != "" && ownerUserID == currentUserID:
+		score += 200
+	default:
+		score += 100
+	}
+	return score
+}
+
+func EncodeCursor(item FeedItem) string {
+	if item.ID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d:%s", item.RankScore, item.ID)
+}
+
+type FeedCursor struct {
+	RankScore int64
+	ID        string
+	SortAt    time.Time
+}
+
+func ParseCursor(value string) (FeedCursor, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return FeedCursor{}, false
+	}
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return FeedCursor{SortAt: parsed}, true
+	}
+	parts := strings.SplitN(trimmed, ":", 2)
+	if len(parts) != 2 {
+		return FeedCursor{}, false
+	}
+	rankScore, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || strings.TrimSpace(parts[1]) == "" {
+		return FeedCursor{}, false
+	}
+	return FeedCursor{RankScore: rankScore, ID: strings.TrimSpace(parts[1])}, true
 }
 
 func feedAuthorName(owner map[string]any, isOfficial bool) string {

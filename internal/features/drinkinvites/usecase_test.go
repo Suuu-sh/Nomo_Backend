@@ -17,6 +17,7 @@ const (
 type fakeRepository struct {
 	calls       []string
 	dailyStatus string
+	blocked     bool
 	existing    *ExistingInvite
 	created     map[string]any
 	updated     map[string]any
@@ -48,6 +49,11 @@ func (f *fakeRepository) ListOutgoingActive(context.Context, string, string, str
 func (f *fakeRepository) DailyStatus(context.Context, string, string, string) (string, error) {
 	f.calls = append(f.calls, "daily_status")
 	return f.dailyStatus, nil
+}
+
+func (f *fakeRepository) BlockExistsBetweenUsers(context.Context, string, string, string) (bool, error) {
+	f.calls = append(f.calls, "block")
+	return f.blocked, nil
 }
 
 func (f *fakeRepository) FindActiveInviteBetweenUsersForDate(context.Context, string, string, string, string) (*ExistingInvite, error) {
@@ -116,7 +122,7 @@ func TestCreateDrinkInviteBlocksUnavailableDailyStatus(t *testing.T) {
 	})
 
 	assertUserError(t, err, ErrorKindConflict, "相手が休肝日のため今日は誘えません。")
-	if want := []string{"daily_status"}; !reflect.DeepEqual(repo.calls, want) {
+	if want := []string{"block", "daily_status"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("repository calls = %v, want %v", repo.calls, want)
 	}
 }
@@ -133,7 +139,7 @@ func TestCreateDrinkInviteRejectsExistingAcceptedInvite(t *testing.T) {
 	})
 
 	assertUserError(t, err, ErrorKindConflict, "今日はもう予約済みです。")
-	if want := []string{"daily_status", "find_active"}; !reflect.DeepEqual(repo.calls, want) {
+	if want := []string{"block", "daily_status", "find_active"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("repository calls = %v, want %v", repo.calls, want)
 	}
 }
@@ -161,7 +167,7 @@ func TestCreateDrinkInviteCreatesPendingInviteAndNotifiesRecipient(t *testing.T)
 	if len(publisher.events) != 1 || publisher.events[0].Kind != EventDrinkInviteCreated || publisher.events[0].Invite.ToUserID != otherUserID {
 		t.Fatalf("events = %#v", publisher.events)
 	}
-	if want := []string{"daily_status", "find_active", "create"}; !reflect.DeepEqual(repo.calls, want) {
+	if want := []string{"block", "daily_status", "find_active", "create"}; !reflect.DeepEqual(repo.calls, want) {
 		t.Fatalf("repository calls = %v, want %v", repo.calls, want)
 	}
 }

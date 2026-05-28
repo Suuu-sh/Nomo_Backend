@@ -8,14 +8,14 @@ import (
 
 type Dependencies struct {
 	Repository Repository
-	Notifier   Notifier
+	Publisher  EventPublisher
 	Logger     Logger
 	Now        func() time.Time
 }
 
 type Usecase struct {
 	repository Repository
-	notifier   Notifier
+	publisher  EventPublisher
 	logger     Logger
 	now        func() time.Time
 }
@@ -25,7 +25,7 @@ func NewUsecase(deps Dependencies) *Usecase {
 	if now == nil {
 		now = time.Now
 	}
-	return &Usecase{repository: deps.Repository, notifier: deps.Notifier, logger: deps.Logger, now: now}
+	return &Usecase{repository: deps.Repository, publisher: deps.Publisher, logger: deps.Logger, now: now}
 }
 
 type ListInput struct {
@@ -93,6 +93,13 @@ func (u *Usecase) CreateFriendship(ctx context.Context, input FriendInput) (map[
 	if friendID == userID {
 		return nil, UserError{Kind: ErrorKindInvalidInput, Message: "cannot add yourself as a friend"}
 	}
+	blocked, err := u.repository.BlockExistsBetweenUsers(ctx, input.AuthToken, userID, friendID)
+	if err != nil {
+		return nil, err
+	}
+	if blocked {
+		return nil, UserError{Kind: ErrorKindConflict, Message: "cannot add blocked user"}
+	}
 	return u.repository.UpsertFriendshipPair(ctx, input.AuthToken, userID, friendID)
 }
 
@@ -156,6 +163,13 @@ func (u *Usecase) CreateFriendRequest(ctx context.Context, input CreateFriendReq
 	if toUserID == fromUserID {
 		return nil, UserError{Kind: ErrorKindInvalidInput, Message: "cannot send a friend request to yourself"}
 	}
+	blocked, err := u.repository.BlockExistsBetweenUsers(ctx, input.AuthToken, fromUserID, toUserID)
+	if err != nil {
+		return nil, err
+	}
+	if blocked {
+		return nil, UserError{Kind: ErrorKindConflict, Message: "cannot send a friend request to blocked user"}
+	}
 	alreadyFriend, err := u.repository.FriendshipExists(ctx, input.AuthToken, fromUserID, toUserID)
 	if err != nil {
 		return nil, err
@@ -167,8 +181,10 @@ func (u *Usecase) CreateFriendRequest(ctx context.Context, input CreateFriendReq
 	if err != nil {
 		return nil, err
 	}
-	if u.notifier != nil {
-		u.notifier.FriendRequestReceived(ctx, input.AuthToken, row)
+	if u.publisher != nil {
+		if event, ok := NewFriendRequestCreatedEvent(row); ok {
+			u.publisher.Publish(ctx, input.AuthToken, event)
+		}
 	}
 	return row, nil
 }
@@ -199,8 +215,10 @@ func (u *Usecase) UpdateFriendRequest(ctx context.Context, input UpdateFriendReq
 			if _, err := u.repository.UpsertFriendshipPair(ctx, input.AuthToken, request.FromUserID, request.ToUserID); err != nil {
 				return nil, err
 			}
-			if u.notifier != nil {
-				u.notifier.FriendRequestAccepted(ctx, input.AuthToken, row)
+			if u.publisher != nil {
+				if event, ok := NewFriendRequestAcceptedEvent(row); ok {
+					u.publisher.Publish(ctx, input.AuthToken, event)
+				}
 			}
 		}
 	}

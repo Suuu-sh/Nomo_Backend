@@ -18,12 +18,20 @@ type Repository interface {
 	DeleteLike(ctx context.Context, authToken, logID, userID string) error
 	LikeState(ctx context.Context, authToken, logID, userID string) (LikeState, error)
 	HiddenDrinkLogIDs(ctx context.Context, authToken, userID string) (map[string]bool, error)
+	HiddenUserIDs(ctx context.Context, authToken, userID string) (map[string]bool, error)
 	DrinkLogOwnerUserID(ctx context.Context, authToken, logID string) (string, error)
 	FindReport(ctx context.Context, authToken, logID, reporterUserID string) (*Report, error)
 	CreateReport(ctx context.Context, authToken string, report Report) error
 }
 
-type Notifier interface {
-	DrinkLogTagged(ctx context.Context, authToken, logID, ownerUserID string, friendIDs []string)
-	DrinkLogLiked(ctx context.Context, authToken, logID, actorUserID string)
+type EventPublisher interface {
+	Publish(ctx context.Context, authToken string, event DomainEvent)
+}
+
+type MediaCleaner interface {
+	DeleteDrinkLogPhoto(ctx context.Context, photoPath string) error
+}
+
+type Logger interface {
+	Warn(message string, args ...any)
 }

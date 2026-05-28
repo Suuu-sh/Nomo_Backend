@@ -896,3 +896,137 @@ Trade-off:
 - snapshot 保存は複数 PostgREST call で構成され、完全な transaction ではない。
 
 今後、グループ共有・権限・招待制が必要になったら、`friend_groups.owner_user_id` に加えて membership/role table を追加する。
+
+## 2026-05-28 追加方針: Daily Status / Feed Ranking / Safety / Media Lifecycle
+
+### Daily Status Feature Slice
+
+`daily_statuses` は `internal/features/dailystatuses` に切り出す。
+HTTP handler は以下だけを担当し、date / status / owner 制約は feature 側へ寄せる。
+
+Endpoint:
+
+- `GET /v1/daily-status?date=YYYY-MM-DD`
+- `PUT /v1/daily-status`
+- `GET /v1/daily-statuses/month?month=YYYY-MM`
+
+判断理由:
+
+- `status` の許可値、`status_date` の `YYYY-MM-DD` validation、owner user id の固定を usecase test で守れる。
+- Calendar は月表示のたびに日別 API を大量に呼ばず、月次取得へ寄せられる。
+- Friends の空き状況参照は `friends` feature が日付を決めて読むだけにし、Mobile から任意 user の daily status を直接読む設計にしない。
+
+Trade-off:
+
+- `daily_statuses` 自体は Supabase/RLS の owner policy に依存するため、Backend だけで全権限を表現しているわけではない。
+- Calendar の隣月セルは月次 prefetch の対象外にし、必要な場合だけ日別 endpoint で補完する。
+
+### Home Feed pagination / ranking
+
+`GET /v1/home/feed` は以下の query を受け付ける。
+
+- `limit`: default 50 / max 100
+- `cursor`: `feed_cursor` または legacy `sort_at` RFC3339
+
+Backend は各 row / `feed_item` に以下を追加する。
+
+- `rank_score`
+- `feed_rank_score`
+- `feed_cursor`
+
+現在の ranking は「recency を主軸に、同秒などの近い投稿で official / mine / friend の weight を足す」軽量実装にする。
+つまり古い公式投稿を常に上に固定するのではなく、投稿時刻を壊さず将来の ranking 差し替えポイントを作る。
+
+判断理由:
+
+- 投稿数が増えても Mobile は `limit/cursor` で段階取得できる。
+- ranking の責務を Mobile ではなく `homefeed` usecase に寄せることで、official post / friend post / 自分 post の順序調整を Backend だけで変えられる。
+- `rank_score` と `feed_cursor` を先に contract に入れておくと、将来おすすめ・ランキング・広告差し込みを envelope 変更なしで試しやすい。
+
+Trade-off:
+
+- 現在の response は互換性維持のため array のままなので、`next_cursor` を top-level で返せない。
+- cursor は各 row の `feed_cursor` を次回 request に渡す設計にしている。
+- ranking score は絶対値ではなく Backend 内部の並び制御用なので、Mobile で意味を解釈しすぎない。
+
+### Notification domain event expansion / outbox foundation
+
+通知を発生させる usecase は、notification usecase を直接呼ばず、Domain Event を publish する方針へ寄せる。
+
+現在の event:
+
+- `drink_invite.created`
+- `drink_invite.accepted`
+- `friend_request.created`
+- `friend_request.accepted`
+- `drink_log.tagged`
+- `drink_log.liked`
+- `drink_log.reported`
+- `system_notification.created`
+
+HTTP adapter が event を受け取り、既存 notification usecase へ橋渡しする。
+同時に `notification_outbox` へ event payload を保存する。
+
+判断理由:
+
+- push / analytics / reminder / audit log を subscriber として横に増やせる。
+- friend request や drink log usecase は「状態変更 + event 発行」までに責務を絞れる。
+- `notification_outbox` に event が残るため、公開後に retry worker / cron を追加しやすい。
+
+Trade-off:
+
+- 現時点では in-process subscriber で処理し、outbox row は `processed` audit として保存する。
+- 本当の retry 保証には、pending row を処理する worker と idempotency key が必要。
+- notification usecase が push 失敗を warn に落とす設計なので、push 単位の retry は次段階で分離する。
+
+次に retry を強める時は、`notification_outbox.status = pending` を worker が処理し、notification 作成と push 送信の結果で `processed` / `failed` / `next_attempt_at` を更新する。
+
+### Block / Mute / Hide User Safety
+
+Backend API:
+
+- `POST /v1/user-blocks`
+- `DELETE /v1/user-blocks/{user_id}`
+- `POST /v1/user-mutes`
+- `DELETE /v1/user-mutes/{user_id}`
+- `POST /v1/feed-hidden-drink-logs`
+- `DELETE /v1/feed-hidden-drink-logs/{drink_log_id}`
+
+Backend model:
+
+- `user_blocks`
+- `user_mutes`
+- `feed_hidden_drink_logs`
+
+Feed 側の方針:
+
+- `homefeed` / `drinklogs` は、自分が report 済みまたは hide 済みの drink log を除外する。
+- 自分が block / mute した user の通常投稿は ranking 前に除外する。
+- official post は運営投稿として扱い、owner が一致しても block/mute による除外対象にしない。
+- friend request / drink invite 作成時は block 関係があれば拒否する。
+
+判断理由:
+
+- 通報だけに頼らず、ユーザー本人が即時に見たくない投稿・相手を消せる。
+- ranking の前段で除外するため、hidden / blocked user の投稿が pagination の枠を消費しにくい。
+- `report` と `hide` を分けたので、「運営へ通報しないが自分の feed から消したい」導線を後から UI に足せる。
+
+Trade-off:
+
+- block / mute / hide の UI はまだ Mobile 側で未接続。Backend contract を先に用意した段階。
+- block 関係の完全な相互拒否には、accept/update 系にも追加の事前チェックが必要。
+- migration rollout 中に table が未作成でも既存 feed が落ちないよう、optional safety table は missing 時 no-op fallback にしている。
+
+### Media Lifecycle
+
+drink log 削除時、返却 row に `photo_path` がある場合は Supabase Storage の `nomo-photos` object 削除を試みる。
+
+判断理由:
+
+- 投稿削除後に orphan photo が残り続けることを減らし、Storage cost と privacy risk を下げる。
+- 削除済み DB row に対する cleanup failure で UX を壊さないよう、Storage delete は best-effort にする。
+
+Trade-off:
+
+- Storage delete が失敗しても API response は成功する。失敗は logger warn で観測する。
+- orphan object の定期検出、signed display URL の Backend 統一、report/hidden 時の photo visibility 制御は次段階。

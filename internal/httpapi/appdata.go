@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yota/nomo/backend/internal/features/dailystatuses"
 	"github.com/yota/nomo/backend/internal/features/drinkinvites"
 	"github.com/yota/nomo/backend/internal/features/drinklogs"
 	"github.com/yota/nomo/backend/internal/features/friendgroups"
@@ -13,6 +14,7 @@ import (
 	"github.com/yota/nomo/backend/internal/features/homefeed"
 	"github.com/yota/nomo/backend/internal/features/notifications"
 	"github.com/yota/nomo/backend/internal/features/profiles"
+	"github.com/yota/nomo/backend/internal/features/usersafety"
 )
 
 type ProfileSaveRequest struct {
@@ -43,6 +45,17 @@ type DrinkInviteUpdateRequest struct {
 
 type DrinkLogReportRequest struct {
 	Reason string `json:"reason"`
+}
+
+type UserSafetyUserRequest struct {
+	TargetUserID  string `json:"target_user_id"`
+	BlockedUserID string `json:"blocked_user_id"`
+	MutedUserID   string `json:"muted_user_id"`
+	UserID        string `json:"user_id"`
+}
+
+type FeedHiddenDrinkLogRequest struct {
+	DrinkLogID string `json:"drink_log_id"`
 }
 
 func (r *router) upsertProfile(w http.ResponseWriter, req *http.Request, authToken string) {
@@ -227,10 +240,111 @@ func (r *router) reportDrinkLog(w http.ResponseWriter, req *http.Request, authTo
 	writeJSON(w, http.StatusOK, result.Body)
 }
 
+func (r *router) blockUser(w http.ResponseWriter, req *http.Request, authToken string) {
+	var input UserSafetyUserRequest
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	row, err := r.userSafetyUsecase().BlockUser(req.Context(), usersafety.UserTargetInput{
+		AuthToken:    authToken,
+		ActorUserID:  req.Header.Get("X-Nomo-User-ID"),
+		TargetUserID: firstNonEmpty(input.BlockedUserID, input.TargetUserID, input.UserID),
+	})
+	if err != nil {
+		writeUserSafetyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, row)
+}
+
+func (r *router) unblockUser(w http.ResponseWriter, req *http.Request, authToken string) {
+	err := r.userSafetyUsecase().UnblockUser(req.Context(), usersafety.UserTargetInput{
+		AuthToken:    authToken,
+		ActorUserID:  req.Header.Get("X-Nomo-User-ID"),
+		TargetUserID: req.PathValue("id"),
+	})
+	if err != nil {
+		writeUserSafetyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"unblocked": true})
+}
+
+func (r *router) muteUser(w http.ResponseWriter, req *http.Request, authToken string) {
+	var input UserSafetyUserRequest
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	row, err := r.userSafetyUsecase().MuteUser(req.Context(), usersafety.UserTargetInput{
+		AuthToken:    authToken,
+		ActorUserID:  req.Header.Get("X-Nomo-User-ID"),
+		TargetUserID: firstNonEmpty(input.MutedUserID, input.TargetUserID, input.UserID),
+	})
+	if err != nil {
+		writeUserSafetyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, row)
+}
+
+func (r *router) unmuteUser(w http.ResponseWriter, req *http.Request, authToken string) {
+	err := r.userSafetyUsecase().UnmuteUser(req.Context(), usersafety.UserTargetInput{
+		AuthToken:    authToken,
+		ActorUserID:  req.Header.Get("X-Nomo-User-ID"),
+		TargetUserID: req.PathValue("id"),
+	})
+	if err != nil {
+		writeUserSafetyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"unmuted": true})
+}
+
+func (r *router) hideDrinkLogFromFeed(w http.ResponseWriter, req *http.Request, authToken string) {
+	var input FeedHiddenDrinkLogRequest
+	if !decodeJSONBody(w, req, &input) {
+		return
+	}
+	row, err := r.userSafetyUsecase().HideDrinkLog(req.Context(), usersafety.DrinkLogInput{
+		AuthToken:  authToken,
+		UserID:     req.Header.Get("X-Nomo-User-ID"),
+		DrinkLogID: input.DrinkLogID,
+	})
+	if err != nil {
+		writeUserSafetyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, row)
+}
+
+func (r *router) unhideDrinkLogFromFeed(w http.ResponseWriter, req *http.Request, authToken string) {
+	err := r.userSafetyUsecase().UnhideDrinkLog(req.Context(), usersafety.DrinkLogInput{
+		AuthToken:  authToken,
+		UserID:     req.Header.Get("X-Nomo-User-ID"),
+		DrinkLogID: req.PathValue("id"),
+	})
+	if err != nil {
+		writeUserSafetyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"unhidden": true})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (r *router) listHomeFeed(w http.ResponseWriter, req *http.Request, authToken string) {
 	rows, err := r.homeFeedUsecase().ListHomeFeed(req.Context(), homefeed.ListInput{
 		AuthToken: authToken,
 		UserID:    req.Header.Get("X-Nomo-User-ID"),
+		Limit:     req.URL.Query().Get("limit"),
+		Cursor:    req.URL.Query().Get("cursor"),
 	})
 	if err != nil {
 		writeHomeFeedError(w, err)
@@ -354,28 +468,43 @@ func (r *router) drinkInviteUsecase(req *http.Request) *drinkinvites.Usecase {
 func (r *router) friendsUsecase(req *http.Request) *friends.Usecase {
 	return friends.NewUsecase(friends.Dependencies{
 		Repository: friends.NewSupabaseRepository(r.deps.Supabase),
-		Notifier:   friendRequestNotifier{router: r, req: req},
+		Publisher:  friendRequestEventPublisher{router: r, req: req},
 		Logger:     r.deps.Logger,
 	})
 }
 
-type friendRequestNotifier struct {
+type friendRequestEventPublisher struct {
 	router *router
 	req    *http.Request
 }
 
-func (n friendRequestNotifier) FriendRequestReceived(_ context.Context, authToken string, requestRow map[string]any) {
-	if n.router == nil || n.req == nil {
+func (p friendRequestEventPublisher) Publish(ctx context.Context, authToken string, event friends.DomainEvent) {
+	if p.router == nil || p.req == nil {
 		return
 	}
-	n.router.createFriendRequestReceivedNotification(n.req, authToken, requestRow)
-}
-
-func (n friendRequestNotifier) FriendRequestAccepted(_ context.Context, authToken string, requestRow map[string]any) {
-	if n.router == nil || n.req == nil {
-		return
+	row := event.RequestRow()
+	switch event.Kind {
+	case friends.EventFriendRequestCreated:
+		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+			EventKind:       string(event.Kind),
+			AggregateType:   "friend_request",
+			AggregateID:     event.Request.ID,
+			ActorUserID:     event.Request.FromUserID,
+			RecipientUserID: event.Request.ToUserID,
+			Payload:         row,
+		})
+		p.router.createFriendRequestReceivedNotification(p.req, authToken, row)
+	case friends.EventFriendRequestAccepted:
+		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+			EventKind:       string(event.Kind),
+			AggregateType:   "friend_request",
+			AggregateID:     event.Request.ID,
+			ActorUserID:     event.Request.ToUserID,
+			RecipientUserID: event.Request.FromUserID,
+			Payload:         row,
+		})
+		p.router.createFriendRequestAcceptedNotification(p.req, authToken, row)
 	}
-	n.router.createFriendRequestAcceptedNotification(n.req, authToken, requestRow)
 }
 
 type drinkInviteEventPublisher struct {
@@ -390,8 +519,24 @@ func (p drinkInviteEventPublisher) Publish(_ context.Context, authToken string, 
 	row := event.InviteRow()
 	switch event.Kind {
 	case drinkinvites.EventDrinkInviteCreated:
+		p.router.recordNotificationOutboxEvent(p.req.Context(), notificationOutboxEvent{
+			EventKind:       string(event.Kind),
+			AggregateType:   "drink_invite",
+			AggregateID:     event.Invite.ID,
+			ActorUserID:     event.Invite.FromUserID,
+			RecipientUserID: event.Invite.ToUserID,
+			Payload:         row,
+		})
 		p.router.createDrinkInviteReceivedNotification(p.req, authToken, row)
 	case drinkinvites.EventDrinkInviteAccepted:
+		p.router.recordNotificationOutboxEvent(p.req.Context(), notificationOutboxEvent{
+			EventKind:       string(event.Kind),
+			AggregateType:   "drink_invite",
+			AggregateID:     event.Invite.ID,
+			ActorUserID:     event.Invite.ToUserID,
+			RecipientUserID: event.Invite.FromUserID,
+			Payload:         row,
+		})
 		p.router.createDrinkInviteAcceptedNotification(p.req, authToken, row)
 	}
 }
@@ -432,28 +577,62 @@ func writeFriendsError(w http.ResponseWriter, err error) {
 
 func (r *router) drinkLogUsecase(req *http.Request) *drinklogs.Usecase {
 	return drinklogs.NewUsecase(drinklogs.Dependencies{
-		Repository: drinklogs.NewSupabaseRepository(r.deps.Supabase),
-		Notifier:   drinkLogNotifier{router: r, req: req},
+		Repository:   drinklogs.NewSupabaseRepository(r.deps.Supabase),
+		Publisher:    drinkLogEventPublisher{router: r, req: req},
+		MediaCleaner: r.drinkLogPhotoCleaner(),
+		Logger:       r.deps.Logger,
 	})
 }
 
-type drinkLogNotifier struct {
+type drinkLogEventPublisher struct {
 	router *router
 	req    *http.Request
 }
 
-func (n drinkLogNotifier) DrinkLogTagged(_ context.Context, authToken, logID, ownerUserID string, friendIDs []string) {
-	if n.router == nil || n.req == nil {
+func (p drinkLogEventPublisher) Publish(ctx context.Context, authToken string, event drinklogs.DomainEvent) {
+	if p.router == nil || p.req == nil {
 		return
 	}
-	n.router.createDrinkLogTaggedNotifications(n.req, authToken, logID, ownerUserID, friendIDs)
-}
-
-func (n drinkLogNotifier) DrinkLogLiked(_ context.Context, authToken, logID, actorUserID string) {
-	if n.router == nil || n.req == nil {
-		return
+	payload := map[string]any{
+		"log_id":        event.LogID,
+		"owner_user_id": event.OwnerUserID,
+		"actor_user_id": event.ActorUserID,
 	}
-	n.router.createDrinkLogLikeNotification(n.req, authToken, logID, actorUserID)
+	if len(event.FriendIDs) > 0 {
+		payload["friend_ids"] = event.FriendIDs
+	}
+	if event.ReportReason != "" {
+		payload["reason"] = string(event.ReportReason)
+		payload["status"] = string(event.ModerationStatus)
+	}
+	switch event.Kind {
+	case drinklogs.EventDrinkLogTagged:
+		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+			EventKind:     string(event.Kind),
+			AggregateType: "drink_log",
+			AggregateID:   event.LogID,
+			ActorUserID:   event.ActorUserID,
+			Payload:       payload,
+		})
+		p.router.createDrinkLogTaggedNotifications(p.req, authToken, event.LogID, event.OwnerUserID, event.FriendIDs)
+	case drinklogs.EventDrinkLogLiked:
+		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+			EventKind:     string(event.Kind),
+			AggregateType: "drink_log",
+			AggregateID:   event.LogID,
+			ActorUserID:   event.ActorUserID,
+			Payload:       payload,
+		})
+		p.router.createDrinkLogLikeNotification(p.req, authToken, event.LogID, event.ActorUserID)
+	case drinklogs.EventDrinkLogReported:
+		p.router.recordNotificationOutboxEvent(ctx, notificationOutboxEvent{
+			EventKind:     string(event.Kind),
+			AggregateType: "drink_log",
+			AggregateID:   event.LogID,
+			ActorUserID:   event.ActorUserID,
+			Payload:       payload,
+		})
+	}
 }
 
 func writeDrinkLogError(w http.ResponseWriter, err error) {
@@ -469,6 +648,27 @@ func writeDrinkLogError(w http.ResponseWriter, err error) {
 			writeError(w, http.StatusNotFound, err.Error())
 		case drinklogs.ErrorKindUpstream:
 			writeError(w, http.StatusBadGateway, "upstream service error")
+		default:
+			writeError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	writeSupabaseError(w, err)
+}
+
+func (r *router) userSafetyUsecase() *usersafety.Usecase {
+	return usersafety.NewUsecase(usersafety.Dependencies{
+		Repository: usersafety.NewSupabaseRepository(r.deps.Supabase),
+	})
+}
+
+func writeUserSafetyError(w http.ResponseWriter, err error) {
+	if kind, ok := usersafety.ErrorKindOf(err); ok {
+		switch kind {
+		case usersafety.ErrorKindInvalidInput:
+			writeError(w, http.StatusBadRequest, err.Error())
+		case usersafety.ErrorKindForbidden:
+			writeError(w, http.StatusForbidden, err.Error())
 		default:
 			writeError(w, http.StatusBadRequest, err.Error())
 		}
@@ -530,6 +730,25 @@ func writeProfileError(w http.ResponseWriter, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())
 		case profiles.ErrorKindNotFound:
 			writeError(w, http.StatusNotFound, err.Error())
+		default:
+			writeError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	writeSupabaseError(w, err)
+}
+
+func (r *router) dailyStatusUsecase() *dailystatuses.Usecase {
+	return dailystatuses.NewUsecase(dailystatuses.Dependencies{
+		Repository: dailystatuses.NewSupabaseRepository(r.deps.Supabase),
+	})
+}
+
+func writeDailyStatusError(w http.ResponseWriter, err error) {
+	if kind, ok := dailystatuses.ErrorKindOf(err); ok {
+		switch kind {
+		case dailystatuses.ErrorKindInvalidInput:
+			writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			writeError(w, http.StatusBadRequest, err.Error())
 		}
