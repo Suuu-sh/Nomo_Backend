@@ -159,7 +159,9 @@ Outbox の直近 rows を確認する。
 ### `POST /v1/admin/notification-outbox/process?limit=50`
 
 Due な `pending` / `failed` outbox rows を再処理する。
-Render cron は `/nomo-notification-worker` を 5分ごとに実行する想定。
+本番 Render cron は課金対象のため、現時点では作成しない。ユーザー数が増えて Pro / paid cron を使う必要が出るまでは、必要時にこの admin endpoint を手動実行する。
+
+将来 cron を有効化する場合は `/nomo-notification-worker` を 5分ごとに実行し、production の `SUPABASE_SERVICE_ROLE_KEY` と `FCM_SERVICE_ACCOUNT_JSON` を設定する。
 
 ## Moderation
 

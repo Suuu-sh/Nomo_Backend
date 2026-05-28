@@ -1077,18 +1077,20 @@ Domain event は `notification_outbox` に `pending` として保存し、in-pro
 - `GET /v1/admin/notification-outbox`
 - `POST /v1/admin/notification-outbox/process`
 - `/nomo-notification-worker` binary
-- Render cron: `nomo-notification-outbox-worker` every 5 minutes
+- Render cron は本番未使用
 
 判断理由:
 
 - event 作成と notification/push dispatch の間で失敗しても、failed row を後で再処理できる。
 - admin endpoint で状態を見られるので、公開後の調査がしやすい。
-- cron worker は web server と同じ image で動かし、環境変数と code path を揃える。
+- worker binary は web server と同じ image に残し、将来 cron 化するときの code path を揃える。
+- Render cron は課金対象のため、ユーザー数が増えて Pro / paid cron が必要になるまで production では作成しない。
 
 Trade-off:
 
 - notification row 作成後の push 失敗は `last_error` に残るが、既存 unique constraint により retry 時に in-app notification は重複しない。push 再送の完全保証は token 単位 outbox を追加する次段階。
-- Render cron は production の `SUPABASE_SERVICE_ROLE_KEY` と `FCM_SERVICE_ACCOUNT_JSON` 設定が必須。
+- cron なし期間は failed/pending outbox の自動再送は保証しない。必要時は `POST /v1/admin/notification-outbox/process` を手動実行する。
+- 将来 Render cron を有効化する場合は production の `SUPABASE_SERVICE_ROLE_KEY` と `FCM_SERVICE_ACCOUNT_JSON` 設定が必須。
 
 ### Block cleanup
 
