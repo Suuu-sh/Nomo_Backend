@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type InviteStatus string
@@ -68,6 +69,17 @@ func CleanDateOnlyOrToday(value, field string, now time.Time) (string, error) {
 	return parsed.Format(time.DateOnly), nil
 }
 
+func CleanActivityLabel(value string) (string, error) {
+	label := strings.Join(strings.Fields(value), " ")
+	if label == "" {
+		return "", nil
+	}
+	if utf8.RuneCountInString(label) > 40 {
+		return "", UserError{Kind: ErrorKindInvalidInput, Message: "activity_label must be 40 characters or fewer"}
+	}
+	return label, nil
+}
+
 func ValidateNewInvite(inviterUserID, inviteeUserID string) error {
 	if inviterUserID == inviteeUserID {
 		return UserError{Kind: ErrorKindInvalidInput, Message: "cannot invite yourself"}
@@ -113,6 +125,7 @@ type Invite struct {
 	InviterUserID string
 	InviteeUserID string
 	ScheduledDate string
+	ActivityLabel string
 	Status        InviteStatus
 }
 
@@ -126,8 +139,9 @@ func InviteFromRow(row map[string]any) Invite {
 	inviterUserID, _ := row["inviter_user_id"].(string)
 	inviteeUserID, _ := row["invitee_user_id"].(string)
 	scheduledDate, _ := row["scheduled_date"].(string)
+	activityLabel, _ := row["activity_label"].(string)
 	status, _ := row["status"].(string)
-	return Invite{ID: id, InviterUserID: inviterUserID, InviteeUserID: inviteeUserID, ScheduledDate: scheduledDate, Status: InviteStatus(status)}
+	return Invite{ID: id, InviterUserID: inviterUserID, InviteeUserID: inviteeUserID, ScheduledDate: scheduledDate, ActivityLabel: activityLabel, Status: InviteStatus(status)}
 }
 
 func NewInviteCreatedEvent(row map[string]any) (DomainEvent, bool) {
@@ -153,6 +167,7 @@ func (e DomainEvent) InviteRow() map[string]any {
 		"inviter_user_id": e.Invite.InviterUserID,
 		"invitee_user_id": e.Invite.InviteeUserID,
 		"scheduled_date":  e.Invite.ScheduledDate,
+		"activity_label":  e.Invite.ActivityLabel,
 		"status":          string(e.Invite.Status),
 	}
 }
@@ -161,6 +176,7 @@ type NewInvite struct {
 	InviterUserID string
 	InviteeUserID string
 	ScheduledDate string
+	ActivityLabel string
 }
 
 type ExistingInvite struct {

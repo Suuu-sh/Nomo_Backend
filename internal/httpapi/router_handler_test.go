@@ -783,6 +783,7 @@ func TestCreateInviteValidatesDateAndCreatesInvite(t *testing.T) {
 				"inviter_user_id": testUserID,
 				"invitee_user_id": otherUserID,
 				"scheduled_date":  "2026-05-23",
+				"activity_label":  "焼肉",
 				"status":          "pending",
 			}})
 		case "/rest/v1/profiles":
@@ -795,13 +796,13 @@ func TestCreateInviteValidatesDateAndCreatesInvite(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/invites", `{"invitee_user_id":"`+otherUserID+`","scheduled_date":"2026-05-23"}`))
+	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/invites", `{"invitee_user_id":"`+otherUserID+`","scheduled_date":"2026-05-23","activity_label":" 焼肉 "}`))
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
 	request, ok := fake.lastRequest("/rest/v1/invites")
-	if !ok || request.Method != http.MethodPost || !strings.Contains(request.Body, "2026-05-23") {
+	if !ok || request.Method != http.MethodPost || !strings.Contains(request.Body, "2026-05-23") || !strings.Contains(request.Body, `"activity_label":"焼肉"`) {
 		t.Fatalf("invite create request = %#v", request)
 	}
 }

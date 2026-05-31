@@ -138,6 +138,7 @@ type Invite struct {
 	InviterUserID string
 	InviteeUserID string
 	ScheduledDate string
+	ActivityLabel string
 	Status        string
 }
 
@@ -146,8 +147,9 @@ func InviteFromRow(row map[string]any) Invite {
 	inviterUserID, _ := row["inviter_user_id"].(string)
 	inviteeUserID, _ := row["invitee_user_id"].(string)
 	scheduledDate, _ := row["scheduled_date"].(string)
+	activityLabel, _ := row["activity_label"].(string)
 	status, _ := row["status"].(string)
-	return Invite{ID: id, InviterUserID: inviterUserID, InviteeUserID: inviteeUserID, ScheduledDate: scheduledDate, Status: status}
+	return Invite{ID: id, InviterUserID: inviterUserID, InviteeUserID: inviteeUserID, ScheduledDate: scheduledDate, ActivityLabel: activityLabel, Status: status}
 }
 
 func FriendRequestIDs(row map[string]any) (requestID, fromUserID, toUserID string) {
@@ -174,6 +176,15 @@ func ScheduledDatePhrase(value string, now time.Time) string {
 		return trimmed
 	}
 	return parsed.Format("1/2")
+}
+
+func InvitePlanPhrase(invite Invite, now time.Time) string {
+	date := ScheduledDatePhrase(invite.ScheduledDate, now)
+	activity := ShortText(invite.ActivityLabel, 40)
+	if activity == "" {
+		return date + "のお誘い"
+	}
+	return date + "に「" + activity + "」"
 }
 
 func ShortText(value string, limit int) string {

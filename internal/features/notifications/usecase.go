@@ -182,7 +182,7 @@ func (u *Usecase) NotifyInviteReceived(ctx context.Context, authToken string, in
 		NotificationDate: DateOrEmpty(invite.ScheduledDate),
 		Kind:             KindInviteReceived,
 		Title:            "お誘いが届きました",
-		Message:          actorName + "さんから" + ScheduledDatePhrase(invite.ScheduledDate, u.now()) + "のお誘いが届きました。",
+		Message:          actorName + "さんから" + InvitePlanPhrase(invite, u.now()) + "が届きました。",
 	})
 }
 
@@ -199,7 +199,7 @@ func (u *Usecase) NotifyInviteAccepted(ctx context.Context, authToken string, in
 		NotificationDate: DateOrEmpty(invite.ScheduledDate),
 		Kind:             KindInviteAccepted,
 		Title:            "お誘いが承認されました",
-		Message:          actorName + "さんが" + ScheduledDatePhrase(invite.ScheduledDate, u.now()) + "のお誘いを承認しました。",
+		Message:          actorName + "さんが" + InvitePlanPhrase(invite, u.now()) + "を承認しました。",
 	})
 }
 
