@@ -40,6 +40,33 @@ func (r *router) listWishItems(w http.ResponseWriter, req *http.Request, authTok
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (r *router) listProfileWishItems(w http.ResponseWriter, req *http.Request, authToken string) {
+	profileID, msg := cleanUUID(req.PathValue("id"), "profile id")
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	limit := 30
+	if raw := req.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+	q := url.Values{}
+	q.Set("select", wishItemSelectColumns)
+	q.Set("owner_user_id", "eq."+profileID)
+	q.Set("visibility", "eq.friends")
+	q.Set("status", "eq.active")
+	q.Set("order", "created_at.desc")
+	q.Set("limit", strconv.Itoa(limit))
+	var rows []map[string]any
+	if err := r.deps.Supabase.Get(req.Context(), authToken, "wish_items", q, &rows); err != nil {
+		writeError(w, http.StatusBadGateway, sanitizeSupabaseError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (r *router) createWishItem(w http.ResponseWriter, req *http.Request, authToken string) {
 	var body wishItemCreateRequest
 	if !decodeJSONBody(w, req, &body) {
