@@ -12,7 +12,7 @@ import (
 	"github.com/yota/ohey/backend/internal/supabase"
 )
 
-const notificationSelectColumns = "id,kind,title,message,created_at,read_at,actor_user_id,memory_id,friend_request_id,invite_id,notification_date,system_key,actor:profiles!notifications_actor_user_id_fkey(id,user_id,display_name,avatar_url),friend_request:friend_requests!notifications_friend_request_id_fkey(id,status),invite:invites!notifications_invite_id_fkey(id,status)"
+const notificationSelectColumns = "id,kind,title,message,created_at,read_at,actor_user_id,memory_id,friend_request_id,invite_id,notification_date,system_key,actor:profiles!notifications_actor_user_id_fkey(id,user_id,display_name,avatar_url),friend_request:friend_requests!notifications_friend_request_id_fkey(id,status),invite:invites!notifications_invite_id_fkey(id,status,activity_label)"
 
 type SupabaseRepository struct {
 	client         *supabase.Client
@@ -107,7 +107,7 @@ func (r *SupabaseRepository) MemoryOwnerUserID(ctx context.Context, authToken, m
 
 func (r *SupabaseRepository) TodayAcceptedInvites(ctx context.Context, authToken, userID, date string) ([]Invite, error) {
 	q := url.Values{}
-	q.Set("select", "id,inviter_user_id,invitee_user_id,scheduled_date,status")
+	q.Set("select", "id,inviter_user_id,invitee_user_id,scheduled_date,activity_label,status")
 	q.Set("scheduled_date", "eq."+date)
 	q.Set("status", "eq.accepted")
 	q.Set("or", "(inviter_user_id.eq."+userID+",invitee_user_id.eq."+userID+")")

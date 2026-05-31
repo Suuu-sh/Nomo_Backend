@@ -37,6 +37,7 @@ type FriendRequestUpdateRequest struct {
 type InviteRequest struct {
 	InviteeUserID string `json:"invitee_user_id"`
 	ScheduledDate string `json:"scheduled_date"`
+	ActivityLabel string `json:"activity_label"`
 }
 
 type InviteUpdateRequest struct {
@@ -527,6 +528,7 @@ func (r *router) createInvite(w http.ResponseWriter, req *http.Request, authToke
 		InviterUserID: req.Header.Get("X-Ohey-User-ID"),
 		InviteeUserID: input.InviteeUserID,
 		ScheduledDate: input.ScheduledDate,
+		ActivityLabel: input.ActivityLabel,
 	})
 	if err != nil {
 		writeInviteError(w, err)

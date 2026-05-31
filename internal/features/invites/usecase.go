@@ -36,6 +36,7 @@ type CreateInput struct {
 	InviterUserID string
 	InviteeUserID string
 	ScheduledDate string
+	ActivityLabel string
 }
 
 type UpdateInput struct {
@@ -73,6 +74,10 @@ func (u *Usecase) CreateInvite(ctx context.Context, input CreateInput) (map[stri
 	if err != nil {
 		return nil, err
 	}
+	activityLabel, err := CleanActivityLabel(input.ActivityLabel)
+	if err != nil {
+		return nil, err
+	}
 	blocked, err := u.repository.BlockExistsBetweenUsers(ctx, input.AuthToken, inviterUserID, inviteeUserID)
 	if err != nil {
 		return nil, err
@@ -101,6 +106,7 @@ func (u *Usecase) CreateInvite(ctx context.Context, input CreateInput) (map[stri
 		InviterUserID: inviterUserID,
 		InviteeUserID: inviteeUserID,
 		ScheduledDate: scheduledDate,
+		ActivityLabel: activityLabel,
 	})
 	if err != nil {
 		return nil, err

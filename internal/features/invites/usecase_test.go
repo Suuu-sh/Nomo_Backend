@@ -72,6 +72,7 @@ func (f *fakeRepository) CreateInvite(_ context.Context, _ string, invite NewInv
 		"inviter_user_id": invite.InviterUserID,
 		"invitee_user_id": invite.InviteeUserID,
 		"scheduled_date":  invite.ScheduledDate,
+		"activity_label":  invite.ActivityLabel,
 		"status":          string(InviteStatusPending),
 	}, nil
 }
@@ -119,6 +120,7 @@ func TestCreateInviteBlocksHasPlansDailyStatus(t *testing.T) {
 		InviterUserID: testUserID,
 		InviteeUserID: otherUserID,
 		ScheduledDate: "2026-05-23",
+		ActivityLabel: "  焼肉に行く  ",
 	})
 
 	assertUserError(t, err, ErrorKindConflict, "相手に予定があるため今日は誘えません。")
@@ -144,6 +146,24 @@ func TestCreateInviteRejectsExistingAcceptedInvite(t *testing.T) {
 	}
 }
 
+func TestCreateInviteRejectsLongActivityLabelBeforeRepositoryAccess(t *testing.T) {
+	repo := &fakeRepository{}
+	usecase := NewUsecase(Dependencies{Repository: repo})
+
+	_, err := usecase.CreateInvite(context.Background(), CreateInput{
+		AuthToken:     testAuthToken,
+		InviterUserID: testUserID,
+		InviteeUserID: otherUserID,
+		ScheduledDate: "2026-05-23",
+		ActivityLabel: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+
+	assertUserError(t, err, ErrorKindInvalidInput, "activity_label must be 40 characters or fewer")
+	if len(repo.calls) != 0 {
+		t.Fatalf("repository calls = %v, want none", repo.calls)
+	}
+}
+
 func TestCreateInviteCreatesPendingInviteAndNotifiesRecipient(t *testing.T) {
 	repo := &fakeRepository{}
 	publisher := &fakePublisher{}
@@ -154,6 +174,7 @@ func TestCreateInviteCreatesPendingInviteAndNotifiesRecipient(t *testing.T) {
 		InviterUserID: testUserID,
 		InviteeUserID: otherUserID,
 		ScheduledDate: "2026-05-23",
+		ActivityLabel: "  焼肉に行く  ",
 	})
 	if err != nil {
 		t.Fatalf("CreateInvite returned error: %v", err)
@@ -161,7 +182,7 @@ func TestCreateInviteCreatesPendingInviteAndNotifiesRecipient(t *testing.T) {
 	if row["status"] != string(InviteStatusPending) {
 		t.Fatalf("created status = %#v", row["status"])
 	}
-	if repo.createdInvite.ScheduledDate != "2026-05-23" || repo.createdInvite.InviterUserID != testUserID || repo.createdInvite.InviteeUserID != otherUserID {
+	if repo.createdInvite.ScheduledDate != "2026-05-23" || repo.createdInvite.InviterUserID != testUserID || repo.createdInvite.InviteeUserID != otherUserID || repo.createdInvite.ActivityLabel != "焼肉に行く" {
 		t.Fatalf("created invite = %#v", repo.createdInvite)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].Kind != EventInviteCreated || publisher.events[0].Invite.InviteeUserID != otherUserID {
