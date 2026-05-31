@@ -9,7 +9,7 @@ import (
 	"github.com/yota/ohey/backend/internal/supabase"
 )
 
-const yuruboSelectColumns = "id,owner_user_id,title,body,category,place_text,place_lat,place_lng,time_label,starts_at,ends_at,status,visibility,expires_at,created_at,updated_at,owner:profiles!yurubos_owner_user_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus)"
+const yuruboSelectColumns = "id,wish_item_id,owner_user_id,title,body,category,place_text,place_lat,place_lng,time_label,starts_at,ends_at,status,visibility,expires_at,created_at,updated_at,owner:profiles!yurubos_owner_user_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus)"
 
 type yuruboReactionRequest struct {
 	ReactionType string `json:"reaction_type"`
@@ -23,6 +23,7 @@ type yuruboCreateRequest struct {
 	TimeLabel  string `json:"time_label"`
 	Visibility string `json:"visibility"`
 	GroupID    string `json:"group_id"`
+	WishItemID string `json:"wish_item_id"`
 }
 
 func (r *router) createYurubo(w http.ResponseWriter, req *http.Request, authToken string) {
@@ -68,6 +69,28 @@ func (r *router) createYurubo(w http.ResponseWriter, req *http.Request, authToke
 		"place_text":    strings.TrimSpace(body.PlaceText),
 		"time_label":    strings.TrimSpace(body.TimeLabel),
 		"visibility":    visibility,
+	}
+	if strings.TrimSpace(body.WishItemID) != "" {
+		wishItemID, msg := cleanUUID(body.WishItemID, "wish item id")
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		q := url.Values{}
+		q.Set("select", "id")
+		q.Set("id", "eq."+wishItemID)
+		q.Set("owner_user_id", "eq."+req.Header.Get("X-Ohey-User-ID"))
+		q.Set("limit", "1")
+		var wishRows []map[string]any
+		if err := r.deps.Supabase.Get(req.Context(), authToken, "wish_items", q, &wishRows); err != nil {
+			writeError(w, http.StatusBadGateway, sanitizeSupabaseError(err))
+			return
+		}
+		if len(wishRows) == 0 {
+			writeError(w, http.StatusBadRequest, "wish item not found")
+			return
+		}
+		payload["wish_item_id"] = wishItemID
 	}
 	var rows []map[string]any
 	if err := r.deps.Supabase.Post(req.Context(), authToken, "yurubos", nil, payload, &rows); err != nil {
