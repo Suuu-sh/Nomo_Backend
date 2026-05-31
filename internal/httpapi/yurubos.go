@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yota/ohey/backend/internal/supabase"
 )
@@ -21,16 +23,18 @@ type yuruboCreateRequest struct {
 	Category   string `json:"category"`
 	PlaceText  string `json:"place_text"`
 	TimeLabel  string `json:"time_label"`
+	StartsAt   string `json:"starts_at"`
 	Visibility string `json:"visibility"`
 	GroupID    string `json:"group_id"`
 	WishItemID string `json:"wish_item_id"`
 }
 
 type yuruboUpdateRequest struct {
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	PlaceText string `json:"place_text"`
-	TimeLabel string `json:"time_label"`
+	Title     string  `json:"title"`
+	Body      string  `json:"body"`
+	PlaceText string  `json:"place_text"`
+	TimeLabel string  `json:"time_label"`
+	StartsAt  *string `json:"starts_at"`
 }
 
 func (r *router) createYurubo(w http.ResponseWriter, req *http.Request, authToken string) {
@@ -76,6 +80,12 @@ func (r *router) createYurubo(w http.ResponseWriter, req *http.Request, authToke
 		"place_text":    strings.TrimSpace(body.PlaceText),
 		"time_label":    strings.TrimSpace(body.TimeLabel),
 		"visibility":    visibility,
+	}
+	if startsAt, ok, msg := normalizeYuruboStartsAt(body.StartsAt); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	} else if ok {
+		payload["starts_at"] = startsAt
 	}
 	if strings.TrimSpace(body.WishItemID) != "" {
 		wishItemID, msg := cleanUUID(body.WishItemID, "wish item id")
@@ -146,6 +156,16 @@ func (r *router) updateYurubo(w http.ResponseWriter, req *http.Request, authToke
 		"body":       strings.TrimSpace(body.Body),
 		"place_text": strings.TrimSpace(body.PlaceText),
 		"time_label": strings.TrimSpace(body.TimeLabel),
+	}
+	if body.StartsAt != nil {
+		if startsAt, ok, msg := normalizeYuruboStartsAt(*body.StartsAt); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		} else if ok {
+			payload["starts_at"] = startsAt
+		} else {
+			payload["starts_at"] = nil
+		}
 	}
 	var rows []map[string]any
 	if err := r.deps.Supabase.Patch(req.Context(), authToken, "yurubos", q, payload, &rows); err != nil {
@@ -417,4 +437,18 @@ func sanitizeSupabaseError(err error) string {
 	}
 	_ = apiErr
 	return "upstream database error"
+}
+
+func normalizeYuruboStartsAt(raw string) (string, bool, string) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false, ""
+	}
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return parsed.UTC().Format(time.RFC3339), true, ""
+	}
+	if parsed, err := time.Parse("2006-01-02", trimmed); err == nil {
+		return parsed.UTC().Format(time.RFC3339), true, ""
+	}
+	return "", false, fmt.Sprintf("invalid starts_at")
 }
