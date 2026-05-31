@@ -73,7 +73,7 @@ func (f *fakeRepository) CreateMemory(_ context.Context, _ string, memory NewMem
 	if f.createdMemory != nil {
 		return f.createdMemory, nil
 	}
-	return map[string]any{"id": testMemoryID, "owner_user_id": memory.OwnerUserID, "marker_rarity": string(memory.MarkerRarity)}, nil
+	return map[string]any{"id": testMemoryID, "owner_user_id": memory.OwnerUserID}, nil
 }
 
 func (f *fakeRepository) CreateMemoryFriendLinks(_ context.Context, _ string, _ string, friendIDs []string) error {
@@ -142,15 +142,6 @@ func (f *fakePublisher) Publish(_ context.Context, _ string, event DomainEvent) 
 	f.events = append(f.events, event)
 }
 
-type fakeMediaCleaner struct {
-	deletedPath string
-}
-
-func (f *fakeMediaCleaner) DeleteMemoryPhoto(_ context.Context, photoPath string) error {
-	f.deletedPath = photoPath
-	return nil
-}
-
 func TestCreateMemoryRejectsNonFriendTagBeforeInsert(t *testing.T) {
 	repo := &fakeRepository{friendships: map[string]bool{otherUserID: false}}
 	usecase := NewUsecase(Dependencies{Repository: repo})
@@ -187,37 +178,17 @@ func TestCreateMemoryRejectsExistingLogOnSameDay(t *testing.T) {
 	}
 }
 
-func TestCreateMemoryRejectsInvalidPhotoPath(t *testing.T) {
-	repo := &fakeRepository{}
-	usecase := NewUsecase(Dependencies{Repository: repo})
-
-	_, err := usecase.CreateMemory(context.Background(), CreateInput{
-		AuthToken:   testAuthToken,
-		OwnerUserID: testUserID,
-		PhotoPath:   "users/" + otherUserID + "/memories/photo.jpg",
-	})
-
-	assertUserError(t, err, ErrorKindInvalidInput, "photo_path must be an uploaded memory photo")
-	if want := []string{"daily_limit"}; !reflect.DeepEqual(repo.calls, want) {
-		t.Fatalf("calls = %v, want %v", repo.calls, want)
-	}
-}
-
-func TestCreateMemoryAssignsRarityOnBackendAndIgnoresClientRarity(t *testing.T) {
+func TestCreateMemoryCreatesMemoRecordAndDeduplicatesFriends(t *testing.T) {
 	repo := &fakeRepository{}
 	publisher := &fakePublisher{}
-	usecase := NewUsecase(Dependencies{
-		Repository:  repo,
-		Publisher:   publisher,
-		RandomFloat: func() float64 { return 0.005 },
-	})
+	usecase := NewUsecase(Dependencies{Repository: repo, Publisher: publisher})
 
 	row, err := usecase.CreateMemory(context.Background(), CreateInput{
-		AuthToken:             testAuthToken,
-		OwnerUserID:           testUserID,
-		PhotoPath:             "users/" + testUserID + "/memories/photo.jpg",
-		FriendIDs:             []string{otherUserID, otherUserID},
-		ClientRequestedRarity: "secret",
+		AuthToken:   testAuthToken,
+		OwnerUserID: testUserID,
+		PlaceName:   "  Shibuya  ",
+		Memo:        "  hello  ",
+		FriendIDs:   []string{otherUserID, otherUserID},
 	})
 	if err != nil {
 		t.Fatalf("CreateMemory returned error: %v", err)
@@ -225,33 +196,14 @@ func TestCreateMemoryAssignsRarityOnBackendAndIgnoresClientRarity(t *testing.T) 
 	if row["id"] != testMemoryID {
 		t.Fatalf("row = %#v", row)
 	}
-	if repo.newMemory.MarkerRarity != MarkerRarityUltraRare {
-		t.Fatalf("marker rarity = %s, want %s", repo.newMemory.MarkerRarity, MarkerRarityUltraRare)
-	}
-	if repo.newMemory.PhotoPath != "users/"+testUserID+"/memories/photo.jpg" {
-		t.Fatalf("photo path = %q", repo.newMemory.PhotoPath)
+	if repo.newMemory.PlaceName != "Shibuya" || repo.newMemory.Memo != "hello" {
+		t.Fatalf("new memory = %#v", repo.newMemory)
 	}
 	if !reflect.DeepEqual(repo.links, []string{otherUserID}) {
 		t.Fatalf("links = %v, want deduplicated friend id", repo.links)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].Kind != EventMemoryTagged {
 		t.Fatalf("events = %#v, want memory tagged", publisher.events)
-	}
-}
-
-func TestCreateMemoryUsesNormalRarityWithoutPhoto(t *testing.T) {
-	repo := &fakeRepository{}
-	usecase := NewUsecase(Dependencies{Repository: repo, RandomFloat: func() float64 { return 0 }})
-
-	_, err := usecase.CreateMemory(context.Background(), CreateInput{
-		AuthToken:   testAuthToken,
-		OwnerUserID: testUserID,
-	})
-	if err != nil {
-		t.Fatalf("CreateMemory returned error: %v", err)
-	}
-	if repo.newMemory.MarkerRarity != MarkerRarityNormal {
-		t.Fatalf("marker rarity = %s, want normal", repo.newMemory.MarkerRarity)
 	}
 }
 
@@ -286,10 +238,9 @@ func TestLikeMemoryNotifiesOnlyWhenLikeCreated(t *testing.T) {
 	}
 }
 
-func TestDeleteMemoryCleansUpPhoto(t *testing.T) {
-	repo := &fakeRepository{deletedMemory: map[string]any{"id": testMemoryID, "photo_path": "users/" + testUserID + "/memories/photo.jpg"}}
-	cleaner := &fakeMediaCleaner{}
-	usecase := NewUsecase(Dependencies{Repository: repo, MediaCleaner: cleaner})
+func TestDeleteMemoryReturnsDeletedRow(t *testing.T) {
+	repo := &fakeRepository{deletedMemory: map[string]any{"id": testMemoryID}}
+	usecase := NewUsecase(Dependencies{Repository: repo})
 
 	row, err := usecase.DeleteMemory(context.Background(), DeleteInput{AuthToken: testAuthToken, MemoryID: testMemoryID, OwnerUserID: testUserID})
 	if err != nil {
@@ -297,9 +248,6 @@ func TestDeleteMemoryCleansUpPhoto(t *testing.T) {
 	}
 	if row["id"] != testMemoryID {
 		t.Fatalf("row = %#v", row)
-	}
-	if cleaner.deletedPath != "users/"+testUserID+"/memories/photo.jpg" {
-		t.Fatalf("deleted path = %q", cleaner.deletedPath)
 	}
 }
 

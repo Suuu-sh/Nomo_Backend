@@ -53,11 +53,11 @@ func TestListHomeFeedShapesDisplayableItemsAndHidesReports(t *testing.T) {
 		hiddenIDs: map[string]bool{"hidden": true},
 		memories: []map[string]any{
 			{
-				"id": "mine", "owner_user_id": testUserID, "happened_at": "2026-05-24T12:00:00Z", "photo_path": "users/me/memories/a.jpg", "caption_y": 0.7,
+				"id": "mine", "owner_user_id": testUserID, "happened_at": "2026-05-24T12:00:00Z",
 				"memo": " hello ", "place_name": " spot ", "owner": map[string]any{"display_name": "Me"}, "memory_likes": []any{map[string]any{"user_id": testUserID}},
 			},
-			{"id": "hidden", "owner_user_id": friendUserID, "happened_at": "2026-05-24T13:00:00Z", "photo_path": "users/friend/memories/a.jpg", "owner": map[string]any{"display_name": "Friend"}},
-			{"id": "no-photo", "owner_user_id": friendUserID, "happened_at": "2026-05-24T14:00:00Z", "owner": map[string]any{"display_name": "Friend"}},
+			{"id": "hidden", "owner_user_id": friendUserID, "happened_at": "2026-05-24T13:00:00Z", "owner": map[string]any{"display_name": "Friend"}},
+			{"id": "friend", "owner_user_id": friendUserID, "happened_at": "2026-05-24T14:00:00Z", "owner": map[string]any{"display_name": "Friend"}},
 		},
 		officialMemories: []map[string]any{{"id": "official", "owner_user_id": friendUserID, "happened_at": "2026-05-25T10:00:00Z", "is_official": true}},
 	}
@@ -67,15 +67,25 @@ func TestListHomeFeedShapesDisplayableItemsAndHidesReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListHomeFeed returned error: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("items = %#v, want 2 displayable non-hidden rows", items)
+	if len(items) != 3 {
+		t.Fatalf("items = %#v, want 3 displayable non-hidden rows", items)
 	}
 	if items[0]["id"] != "official" {
 		t.Fatalf("items sorted = %#v", items)
 	}
-	feed, ok := items[1]["feed_item"].(FeedItem)
+	var mine map[string]any
+	for _, item := range items {
+		if item["id"] == "mine" {
+			mine = item
+			break
+		}
+	}
+	if mine == nil {
+		t.Fatalf("items = %#v, want mine item", items)
+	}
+	feed, ok := mine["feed_item"].(FeedItem)
 	if !ok {
-		t.Fatalf("feed_item = %#v", items[1]["feed_item"])
+		t.Fatalf("feed_item = %#v", mine["feed_item"])
 	}
 	if feed.PostKind != "mine" || !feed.OwnedByMe || feed.AuthorName != "Me" || feed.Body != "hello" || feed.Place != "spot" {
 		t.Fatalf("feed item = %#v", feed)

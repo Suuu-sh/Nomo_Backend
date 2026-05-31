@@ -12,7 +12,7 @@ import (
 	"github.com/yota/ohey/backend/internal/supabase"
 )
 
-const memorySelectColumns = "id,owner_user_id,happened_at,place_name,place_lat,place_lng,memo,caption_y,photo_path,link_url,marker_rarity,is_official,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus),memory_likes(user_id),memory_tagged_users(profiles(id,user_id,display_name,gender,character_key,avatar_url,is_plus))"
+const memorySelectColumns = "id,owner_user_id,happened_at,place_name,place_lat,place_lng,memo,link_url,is_official,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,gender,character_key,avatar_url,is_plus),memory_likes(user_id),memory_tagged_users(profiles(id,user_id,display_name,gender,character_key,avatar_url,is_plus))"
 
 type SupabaseRepository struct {
 	client *supabase.Client
@@ -106,9 +106,6 @@ func (r *SupabaseRepository) CreateMemory(ctx context.Context, authToken string,
 		"place_lat":     memory.PlaceLat,
 		"place_lng":     memory.PlaceLng,
 		"memo":          strings.TrimSpace(memory.Memo),
-		"caption_y":     memory.CaptionY,
-		"photo_path":    memory.PhotoPath,
-		"marker_rarity": string(memory.MarkerRarity),
 		"is_official":   memory.IsOfficial,
 	}
 	var rows []map[string]any

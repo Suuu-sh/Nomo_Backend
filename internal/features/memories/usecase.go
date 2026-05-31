@@ -7,21 +7,15 @@ import (
 )
 
 type Dependencies struct {
-	Repository   Repository
-	Publisher    EventPublisher
-	MediaCleaner MediaCleaner
-	Logger       Logger
-	Now          func() time.Time
-	RandomFloat  func() float64
+	Repository Repository
+	Publisher  EventPublisher
+	Now        func() time.Time
 }
 
 type Usecase struct {
-	repository   Repository
-	publisher    EventPublisher
-	mediaCleaner MediaCleaner
-	logger       Logger
-	now          func() time.Time
-	randomFloat  func() float64
+	repository Repository
+	publisher  EventPublisher
+	now        func() time.Time
 }
 
 func NewUsecase(deps Dependencies) *Usecase {
@@ -29,11 +23,7 @@ func NewUsecase(deps Dependencies) *Usecase {
 	if now == nil {
 		now = time.Now
 	}
-	randomFloat := deps.RandomFloat
-	if randomFloat == nil {
-		randomFloat = RandomFloat64
-	}
-	return &Usecase{repository: deps.Repository, publisher: deps.Publisher, mediaCleaner: deps.MediaCleaner, logger: deps.Logger, now: now, randomFloat: randomFloat}
+	return &Usecase{repository: deps.Repository, publisher: deps.Publisher, now: now}
 }
 
 type ListInput struct {
@@ -51,10 +41,7 @@ type CreateInput struct {
 	PlaceLat              *float64
 	PlaceLng              *float64
 	Memo                  string
-	CaptionY              *float64
-	PhotoPath             string
 	FriendIDs             []string
-	ClientRequestedRarity string
 }
 
 type DeleteInput struct {
@@ -150,21 +137,14 @@ func (u *Usecase) CreateMemory(ctx context.Context, input CreateInput) (map[stri
 	if exists {
 		return nil, UserError{Kind: ErrorKindConflict, Message: "投稿は1日1つまでです"}
 	}
-	photoPath, err := CleanUserPhotoPath(ownerUserID, input.PhotoPath)
-	if err != nil {
-		return nil, err
-	}
 	row, err := u.repository.CreateMemory(ctx, input.AuthToken, NewMemory{
-		OwnerUserID:  ownerUserID,
-		HappenedAt:   happenedAt,
-		PlaceName:    strings.TrimSpace(input.PlaceName),
-		PlaceLat:     input.PlaceLat,
-		PlaceLng:     input.PlaceLng,
-		Memo:         strings.TrimSpace(input.Memo),
-		CaptionY:     CleanCaptionY(input.CaptionY),
-		PhotoPath:    photoPath,
-		MarkerRarity: MarkerRarityForPhotoPath(photoPath, u.randomFloat),
-		IsOfficial:   false,
+		OwnerUserID: ownerUserID,
+		HappenedAt:  happenedAt,
+		PlaceName:   strings.TrimSpace(input.PlaceName),
+		PlaceLat:    input.PlaceLat,
+		PlaceLng:    input.PlaceLng,
+		Memo:        strings.TrimSpace(input.Memo),
+		IsOfficial:  false,
 	})
 	if err != nil {
 		return nil, err
@@ -199,13 +179,6 @@ func (u *Usecase) DeleteMemory(ctx context.Context, input DeleteInput) (map[stri
 	}
 	if row == nil {
 		return nil, UserError{Kind: ErrorKindNotFound, Message: "memory not found"}
-	}
-	if u.mediaCleaner != nil {
-		if photoPath := strings.TrimSpace(stringValue(row, "photo_path")); photoPath != "" {
-			if err := u.mediaCleaner.DeleteMemoryPhoto(ctx, photoPath); err != nil && u.logger != nil {
-				u.logger.Warn("failed to delete memory photo", "memory_id", memoryID, "photo_path", photoPath, "error", err)
-			}
-		}
 	}
 	return row, nil
 }

@@ -675,10 +675,8 @@ func writeFriendsError(w http.ResponseWriter, err error) {
 
 func (r *router) memoryUsecase(req *http.Request) *memories.Usecase {
 	return memories.NewUsecase(memories.Dependencies{
-		Repository:   memories.NewSupabaseRepository(r.deps.Supabase),
-		Publisher:    memoryEventPublisher{router: r, req: req},
-		MediaCleaner: r.memoryPhotoCleaner(),
-		Logger:       r.deps.Logger,
+		Repository: memories.NewSupabaseRepository(r.deps.Supabase),
+		Publisher:  memoryEventPublisher{router: r, req: req},
 	})
 }
 

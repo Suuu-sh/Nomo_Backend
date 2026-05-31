@@ -616,7 +616,6 @@ func TestCreateMemoryValidatesFriendIDsAndCreatesLinks(t *testing.T) {
 				"owner_user_id": testUserID,
 				"place_name":    "Test Place",
 				"memo":          "memo",
-				"photo_path":    "",
 				"is_official":   false,
 			}})
 		case "/rest/v1/memory_tagged_users":
@@ -851,44 +850,6 @@ func TestAdminCreateNotificationRejectsInvalidRecipient(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
-	}
-}
-
-func TestCreateMediaUploadURLCreatesUserScopedMemoryPhotoPath(t *testing.T) {
-	fake := newFakeSupabase(t, func(w http.ResponseWriter, req *http.Request) {
-		if strings.HasPrefix(req.URL.Path, "/storage/v1/object/upload/sign/ohey-photos/users/"+testUserID+"/memories/") {
-			writeFakeJSON(w, http.StatusOK, map[string]any{
-				"url":   "/object/upload/sign/ohey-photos/users/" + testUserID + "/memories/photo.jpg?token=upload-token",
-				"token": "upload-token",
-			})
-			return
-		}
-		writeFakeJSON(w, http.StatusOK, []map[string]any{})
-	})
-	w := httptest.NewRecorder()
-
-	testRouter(fake).ServeHTTP(w, authedRequest(http.MethodPost, "/v1/media/upload-url", `{"kind":"memory_photo","file_extension":".jpg","content_type":"image/jpeg"}`))
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body["bucket"] != "ohey-photos" || body["token"] != "upload-token" || body["content_type"] != "image/jpeg" {
-		t.Fatalf("response = %#v", body)
-	}
-	path, _ := body["path"].(string)
-	if !strings.HasPrefix(path, "users/"+testUserID+"/memories/") || !strings.HasSuffix(path, ".jpg") {
-		t.Fatalf("path = %q", path)
-	}
-	request, ok := fake.lastRequest("/storage/v1/object/upload/sign/ohey-photos/" + path)
-	if !ok {
-		t.Fatalf("storage signed upload request for %q was not sent", path)
-	}
-	if request.Method != http.MethodPost {
-		t.Fatalf("storage method = %s, want POST", request.Method)
 	}
 }
 
