@@ -288,7 +288,7 @@ func (r *router) adminDeleteUser(w http.ResponseWriter, req *http.Request, admin
 
 func (r *router) adminListMemories(w http.ResponseWriter, req *http.Request, _ AuthUser) {
 	q := url.Values{}
-	q.Set("select", "id,owner_user_id,happened_at,place_name,place_lat,place_lng,memo,caption_y,photo_path,link_url,marker_rarity,is_official,created_at,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,avatar_url,is_plus)")
+	q.Set("select", "id,owner_user_id,happened_at,place_name,place_lat,place_lng,memo,link_url,is_official,created_at,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,avatar_url,is_plus)")
 	q.Set("order", "created_at.desc")
 	q.Set("limit", "80")
 	var rows []map[string]any
@@ -325,9 +325,9 @@ func (r *router) adminListMemoryReports(w http.ResponseWriter, req *http.Request
 }
 
 func (r *router) adminMemoryReports(req *http.Request, includeModerationColumns bool, status string) ([]map[string]any, error) {
-	selectColumns := "id,memory_id,reporter_user_id,reason,created_at,memory:memories!memory_reports_memory_id_fkey(id,owner_user_id,happened_at,memo,photo_path,is_official,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,avatar_url)),reporter:profiles!memory_reports_reporter_user_id_fkey(id,user_id,display_name,avatar_url)"
+	selectColumns := "id,memory_id,reporter_user_id,reason,created_at,memory:memories!memory_reports_memory_id_fkey(id,owner_user_id,happened_at,memo,is_official,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,avatar_url)),reporter:profiles!memory_reports_reporter_user_id_fkey(id,user_id,display_name,avatar_url)"
 	if includeModerationColumns {
-		selectColumns = "id,memory_id,reporter_user_id,reason,status,hidden_at,reviewed_at,reviewed_by_user_id,moderation_note,created_at,memory:memories!memory_reports_memory_id_fkey(id,owner_user_id,happened_at,memo,photo_path,is_official,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,avatar_url)),reporter:profiles!memory_reports_reporter_user_id_fkey(id,user_id,display_name,avatar_url)"
+		selectColumns = "id,memory_id,reporter_user_id,reason,status,hidden_at,reviewed_at,reviewed_by_user_id,moderation_note,created_at,memory:memories!memory_reports_memory_id_fkey(id,owner_user_id,happened_at,memo,is_official,owner:profiles!memories_owner_user_id_fkey(id,user_id,display_name,avatar_url)),reporter:profiles!memory_reports_reporter_user_id_fkey(id,user_id,display_name,avatar_url)"
 	}
 	q := url.Values{}
 	q.Set("select", selectColumns)
@@ -414,10 +414,7 @@ func (r *router) adminCreateMemory(w http.ResponseWriter, req *http.Request, _ A
 		"happened_at":   happenedAt.Format(time.RFC3339),
 		"place_name":    strings.TrimSpace(input.PlaceName),
 		"memo":          strings.TrimSpace(input.Memo),
-		"caption_y":     cleanMemoryCaptionY(input.CaptionY),
-		"photo_path":    strings.TrimSpace(input.PhotoPath),
 		"link_url":      strings.TrimSpace(input.LinkURL),
-		"marker_rarity": cleanMemoryMarkerRarity(input.MarkerRarity),
 		"is_official":   input.IsOfficial,
 	}
 	var rows []Memory
@@ -465,17 +462,8 @@ func (r *router) adminUpdateMemory(w http.ResponseWriter, req *http.Request, _ A
 	if input.Memo != nil {
 		payload["memo"] = strings.TrimSpace(*input.Memo)
 	}
-	if input.CaptionY != nil {
-		payload["caption_y"] = cleanMemoryCaptionY(input.CaptionY)
-	}
-	if input.PhotoPath != nil {
-		payload["photo_path"] = strings.TrimSpace(*input.PhotoPath)
-	}
 	if input.LinkURL != nil {
 		payload["link_url"] = strings.TrimSpace(*input.LinkURL)
-	}
-	if input.MarkerRarity != nil {
-		payload["marker_rarity"] = cleanMemoryMarkerRarity(*input.MarkerRarity)
 	}
 	if input.IsOfficial != nil {
 		payload["is_official"] = *input.IsOfficial

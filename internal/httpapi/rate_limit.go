@@ -50,11 +50,6 @@ var (
 		Limit:  20,
 		Window: time.Hour,
 	}
-	rateLimitCreateUploadURL = rateLimitPolicy{
-		Action: "media_upload_url_create",
-		Limit:  30,
-		Window: time.Hour,
-	}
 	rateLimitAuthSignup = rateLimitPolicy{
 		Action: "auth_signup",
 		Limit:  8,

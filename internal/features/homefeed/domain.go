@@ -55,8 +55,6 @@ type FeedItem struct {
 	IsOfficial  bool           `json:"is_official"`
 	Body        string         `json:"body"`
 	Place       string         `json:"place"`
-	PhotoPath   string         `json:"photo_path"`
-	CaptionY    float64        `json:"caption_y"`
 	LinkURL     string         `json:"link_url"`
 	LikeCount   int            `json:"like_count"`
 	LikedByMe   bool           `json:"liked_by_me"`
@@ -82,8 +80,7 @@ func BuildFeedItem(row map[string]any, currentUserID string) (FeedItem, bool) {
 	ownerUserID := stringValue(row, "owner_user_id")
 	isOfficial := boolValue(row, "is_official")
 	ownedByMe := ownerUserID != "" && ownerUserID == currentUserID
-	photoPath := strings.TrimSpace(stringValue(row, "photo_path"))
-	displayable := isOfficial || (photoPath != "" && ownerUserID != "")
+	displayable := isOfficial || ownerUserID != ""
 	if !displayable || id == "" {
 		return FeedItem{}, false
 	}
@@ -108,8 +105,6 @@ func BuildFeedItem(row map[string]any, currentUserID string) (FeedItem, bool) {
 		IsOfficial:  isOfficial,
 		Body:        strings.TrimSpace(stringValue(row, "memo")),
 		Place:       strings.TrimSpace(stringValue(row, "place_name")),
-		PhotoPath:   photoPath,
-		CaptionY:    captionYValue(row),
 		LinkURL:     strings.TrimSpace(stringValue(row, "link_url")),
 		LikeCount:   intValue(row, "like_count"),
 		LikedByMe:   boolValue(row, "liked_by_me"),
@@ -277,20 +272,6 @@ func feedAuthorName(owner map[string]any, isOfficial bool) string {
 		}
 	}
 	return "ohey_user"
-}
-
-func captionYValue(row map[string]any) float64 {
-	value, ok := numericValue(row["caption_y"])
-	if !ok {
-		return 0.5
-	}
-	if value < 0 {
-		return 0
-	}
-	if value > 1 {
-		return 1
-	}
-	return value
 }
 
 func accentSeed(value string) int {

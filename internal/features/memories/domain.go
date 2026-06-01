@@ -1,8 +1,6 @@
 package memories
 
 import (
-	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"regexp"
 	"strings"
@@ -69,64 +67,6 @@ func CleanUUIDs(values []string, field string) ([]string, error) {
 	return ids, nil
 }
 
-type MarkerRarity string
-
-const (
-	MarkerRarityNormal    MarkerRarity = "normal"
-	MarkerRarityUncommon  MarkerRarity = "uncommon"
-	MarkerRarityRare      MarkerRarity = "rare"
-	MarkerRaritySuperRare MarkerRarity = "super_rare"
-	MarkerRarityUltraRare MarkerRarity = "ultra_rare"
-	MarkerRaritySecret    MarkerRarity = "secret"
-)
-
-func MarkerRarityForPhotoRoll(roll float64) MarkerRarity {
-	switch {
-	case roll < 0.001:
-		return MarkerRaritySecret
-	case roll < 0.010:
-		return MarkerRarityUltraRare
-	case roll < 0.070:
-		return MarkerRaritySuperRare
-	case roll < 0.250:
-		return MarkerRarityRare
-	default:
-		return MarkerRarityUncommon
-	}
-}
-
-func RandomFloat64() float64 {
-	var buf [8]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return float64(time.Now().UnixNano()%1_000_000) / 1_000_000
-	}
-	value := binary.BigEndian.Uint64(buf[:]) >> 11
-	return float64(value) / (1 << 53)
-}
-
-func MarkerRarityForPhotoPath(photoPath string, randomFloat func() float64) MarkerRarity {
-	if strings.TrimSpace(photoPath) == "" {
-		return MarkerRarityNormal
-	}
-	if randomFloat == nil {
-		randomFloat = RandomFloat64
-	}
-	return MarkerRarityForPhotoRoll(randomFloat())
-}
-
-func CleanCaptionY(value *float64) float64 {
-	if value == nil {
-		return 0.5
-	}
-	if *value < 0 {
-		return 0
-	}
-	if *value > 1 {
-		return 1
-	}
-	return *value
-}
-
 type DayWindowInput struct {
 	HappenedOn            string
 	TimezoneOffsetMinutes *int
@@ -155,37 +95,6 @@ func MemoryDayWindow(input DayWindowInput, happenedAt time.Time) (time.Time, tim
 	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location)
 	end := start.AddDate(0, 0, 1)
 	return start.UTC(), end.UTC(), nil
-}
-
-func CleanUserPhotoPath(ownerUserID, value string) (string, error) {
-	path := strings.TrimSpace(value)
-	if path == "" {
-		return "", nil
-	}
-	if len(path) > 512 {
-		return "", UserError{Kind: ErrorKindInvalidInput, Message: "photo_path is too long"}
-	}
-	if strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") {
-		return "", UserError{Kind: ErrorKindInvalidInput, Message: "photo_path is invalid"}
-	}
-	prefix := "users/" + ownerUserID + "/memories/"
-	if !strings.HasPrefix(path, prefix) {
-		return "", UserError{Kind: ErrorKindInvalidInput, Message: "photo_path must be an uploaded memory photo"}
-	}
-	if !hasAllowedPhotoExtension(path) {
-		return "", UserError{Kind: ErrorKindInvalidInput, Message: "photo_path file type is unsupported"}
-	}
-	return path, nil
-}
-
-func hasAllowedPhotoExtension(path string) bool {
-	lower := strings.ToLower(path)
-	for _, suffix := range []string{".jpg", ".jpeg", ".png", ".heic", ".webp"} {
-		if strings.HasSuffix(lower, suffix) {
-			return true
-		}
-	}
-	return false
 }
 
 type ReportReason string
@@ -257,16 +166,13 @@ func NewReportBody(report Report, duplicate bool) map[string]any {
 }
 
 type NewMemory struct {
-	OwnerUserID  string
-	HappenedAt   time.Time
-	PlaceName    string
-	PlaceLat     *float64
-	PlaceLng     *float64
-	Memo         string
-	CaptionY     float64
-	PhotoPath    string
-	MarkerRarity MarkerRarity
-	IsOfficial   bool
+	OwnerUserID string
+	HappenedAt  time.Time
+	PlaceName   string
+	PlaceLat    *float64
+	PlaceLng    *float64
+	Memo        string
+	IsOfficial  bool
 }
 
 type LikeState struct {

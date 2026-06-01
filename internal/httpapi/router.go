@@ -43,6 +43,7 @@ func NewRouter(deps Dependencies) http.Handler {
 
 func (r *router) routes() {
 	r.mux.HandleFunc("GET /healthz", r.health)
+	r.mux.HandleFunc("GET /share/yurubos/{id}", r.shareYurubo)
 	r.mux.HandleFunc("POST /v1/auth/signup", r.signupWithPassword)
 	r.mux.HandleFunc("GET /v1/me/profile", r.auth(r.getProfile))
 	r.mux.HandleFunc("PUT /v1/me/profile", r.auth(r.upsertProfile))
@@ -84,8 +85,6 @@ func (r *router) routes() {
 	r.mux.HandleFunc("POST /v1/user-reports", r.auth(r.reportUser))
 	r.mux.HandleFunc("POST /v1/memory-hides", r.auth(r.hideMemoryFromFeed))
 	r.mux.HandleFunc("DELETE /v1/memory-hides/{id}", r.auth(r.unhideMemoryFromFeed))
-	r.mux.HandleFunc("POST /v1/media/upload-url", r.auth(r.createMediaUploadURL))
-	r.mux.HandleFunc("POST /v1/media/display-url", r.auth(r.createMediaDisplayURL))
 	r.mux.HandleFunc("GET /v1/notifications", r.auth(r.listNotifications))
 	r.mux.HandleFunc("PATCH /v1/notifications/read-all", r.auth(r.markNotificationsRead))
 	r.mux.HandleFunc("PUT /v1/me/push-token", r.auth(r.registerPushToken))
@@ -109,7 +108,6 @@ func (r *router) routes() {
 	r.mux.HandleFunc("PATCH /v1/admin/memory-reports/{id}", r.admin(r.adminUpdateMemoryReport))
 	r.mux.HandleFunc("GET /v1/admin/notification-outbox", r.admin(r.adminListNotificationOutbox))
 	r.mux.HandleFunc("POST /v1/admin/notification-outbox/process", r.admin(r.adminProcessNotificationOutbox))
-	r.mux.HandleFunc("GET /v1/admin/media/orphan-memory-photos", r.admin(r.adminListOrphanMemoryPhotos))
 	r.mux.HandleFunc("POST /v1/admin/memories", r.admin(r.adminCreateMemory))
 	r.mux.HandleFunc("PATCH /v1/admin/memories/{id}", r.admin(r.adminUpdateMemory))
 	r.mux.HandleFunc("DELETE /v1/admin/memories/{id}", r.admin(r.adminDeleteMemory))
@@ -192,28 +190,6 @@ func (r *router) listMemories(w http.ResponseWriter, req *http.Request, authToke
 	writeJSON(w, http.StatusOK, rows)
 }
 
-func cleanMemoryMarkerRarity(value string) string {
-	switch strings.TrimSpace(value) {
-	case "uncommon", "rare", "super_rare", "ultra_rare", "secret":
-		return strings.TrimSpace(value)
-	default:
-		return "normal"
-	}
-}
-
-func cleanMemoryCaptionY(value *float64) float64 {
-	if value == nil {
-		return 0.5
-	}
-	if *value < 0 {
-		return 0
-	}
-	if *value > 1 {
-		return 1
-	}
-	return *value
-}
-
 func (r *router) createMemory(w http.ResponseWriter, req *http.Request, authToken string) {
 	var input CreateMemoryRequest
 	if !decodeJSONBody(w, req, &input) {
@@ -229,10 +205,7 @@ func (r *router) createMemory(w http.ResponseWriter, req *http.Request, authToke
 		PlaceLat:              input.PlaceLat,
 		PlaceLng:              input.PlaceLng,
 		Memo:                  input.Memo,
-		CaptionY:              input.CaptionY,
-		PhotoPath:             input.PhotoPath,
 		FriendIDs:             input.FriendIDs,
-		ClientRequestedRarity: input.MarkerRarity,
 	})
 	if err != nil {
 		writeMemoryError(w, err)

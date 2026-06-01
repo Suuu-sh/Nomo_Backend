@@ -27,11 +27,3 @@ type Repository interface {
 type EventPublisher interface {
 	Publish(ctx context.Context, authToken string, event DomainEvent)
 }
-
-type MediaCleaner interface {
-	DeleteMemoryPhoto(ctx context.Context, photoPath string) error
-}
-
-type Logger interface {
-	Warn(message string, args ...any)
-}

@@ -24,17 +24,14 @@ type Friend struct {
 }
 
 type Memory struct {
-	ID           string    `json:"id"`
-	HappenedAt   time.Time `json:"happened_at"`
-	PlaceName    string    `json:"place_name,omitempty"`
-	PlaceLat     *float64  `json:"place_lat,omitempty"`
-	PlaceLng     *float64  `json:"place_lng,omitempty"`
-	Memo         string    `json:"memo,omitempty"`
-	CaptionY     float64   `json:"caption_y"`
-	PhotoPath    string    `json:"photo_path,omitempty"`
-	LinkURL      string    `json:"link_url,omitempty"`
-	MarkerRarity string    `json:"marker_rarity,omitempty"`
-	IsOfficial   bool      `json:"is_official"`
+	ID         string    `json:"id"`
+	HappenedAt time.Time `json:"happened_at"`
+	PlaceName  string    `json:"place_name,omitempty"`
+	PlaceLat   *float64  `json:"place_lat,omitempty"`
+	PlaceLng   *float64  `json:"place_lng,omitempty"`
+	Memo       string    `json:"memo,omitempty"`
+	LinkURL    string    `json:"link_url,omitempty"`
+	IsOfficial bool      `json:"is_official"`
 }
 
 type CreateMemoryRequest struct {
@@ -45,9 +42,6 @@ type CreateMemoryRequest struct {
 	PlaceLat              *float64   `json:"place_lat"`
 	PlaceLng              *float64   `json:"place_lng"`
 	Memo                  string     `json:"memo"`
-	CaptionY              *float64   `json:"caption_y"`
-	PhotoPath             string     `json:"photo_path"`
-	MarkerRarity          string     `json:"marker_rarity"`
 	FriendIDs             []string   `json:"friend_ids"`
 }
 
@@ -92,28 +86,22 @@ type AdminUpdateUserRequest struct {
 }
 
 type AdminCreateMemoryRequest struct {
-	OwnerUserID  string    `json:"owner_user_id"`
-	HappenedAt   time.Time `json:"happened_at"`
-	PlaceName    string    `json:"place_name"`
-	Memo         string    `json:"memo"`
-	CaptionY     *float64  `json:"caption_y"`
-	PhotoPath    string    `json:"photo_path"`
-	LinkURL      string    `json:"link_url"`
-	MarkerRarity string    `json:"marker_rarity"`
-	FriendIDs    []string  `json:"friend_ids"`
-	IsOfficial   bool      `json:"is_official"`
+	OwnerUserID string    `json:"owner_user_id"`
+	HappenedAt  time.Time `json:"happened_at"`
+	PlaceName   string    `json:"place_name"`
+	Memo        string    `json:"memo"`
+	LinkURL     string    `json:"link_url"`
+	FriendIDs   []string  `json:"friend_ids"`
+	IsOfficial  bool      `json:"is_official"`
 }
 
 type AdminUpdateMemoryRequest struct {
-	OwnerUserID  *string    `json:"owner_user_id"`
-	HappenedAt   *time.Time `json:"happened_at"`
-	PlaceName    *string    `json:"place_name"`
-	Memo         *string    `json:"memo"`
-	CaptionY     *float64   `json:"caption_y"`
-	PhotoPath    *string    `json:"photo_path"`
-	LinkURL      *string    `json:"link_url"`
-	MarkerRarity *string    `json:"marker_rarity"`
-	IsOfficial   *bool      `json:"is_official"`
+	OwnerUserID *string    `json:"owner_user_id"`
+	HappenedAt  *time.Time `json:"happened_at"`
+	PlaceName   *string    `json:"place_name"`
+	Memo        *string    `json:"memo"`
+	LinkURL     *string    `json:"link_url"`
+	IsOfficial  *bool      `json:"is_official"`
 }
 
 type AdminUpdateMemoryReportRequest struct {
